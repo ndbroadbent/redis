@@ -976,11 +976,11 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mem_total += mem;
 
     mem = 0;
-    if (listLength(server.slaves)) {
+    if (listLength(server.replicas)) {
         listIter li;
         listNode *ln;
 
-        listRewind(server.slaves,&li);
+        listRewind(server.replicas,&li);
         while((ln = listNext(&li))) {
             client *c = listNodeValue(ln);
             mem += getClientOutputBufferMemoryUsage(c);
@@ -988,7 +988,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
             mem += sizeof(client);
         }
     }
-    mh->clients_slaves = mem;
+    mh->clients_replicas = mem;
     mem_total+=mem;
 
     mem = 0;
@@ -999,7 +999,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
         listRewind(server.clients,&li);
         while((ln = listNext(&li))) {
             client *c = listNodeValue(ln);
-            if (c->flags & CLIENT_SLAVE && !(c->flags & CLIENT_MONITOR))
+            if (c->flags & CLIENT_REPLICA && !(c->flags & CLIENT_MONITOR))
                 continue;
             mem += getClientOutputBufferMemoryUsage(c);
             mem += sdsAllocSize(c->querybuf);
@@ -1084,7 +1084,7 @@ sds getMemoryDoctorReport(void) {
     int high_alloc_frag = 0;/* High allocator fragmentation. */
     int high_proc_rss = 0;  /* High process rss overhead. */
     int high_alloc_rss = 0; /* High rss overhead. */
-    int big_slave_buf = 0;  /* Slave buffers are too big. */
+    int big_replica_buf = 0;  /* Replica buffers are too big. */
     int big_client_buf = 0; /* Client buffers are too big. */
     int many_scripts = 0;   /* Script cache has too many scripts. */
     int num_reports = 0;
@@ -1125,16 +1125,16 @@ sds getMemoryDoctorReport(void) {
         }
 
         /* Clients using more than 200k each average? */
-        long numslaves = listLength(server.slaves);
-        long numclients = listLength(server.clients)-numslaves;
+        long numreplicas = listLength(server.replicas);
+        long numclients = listLength(server.clients)-numreplicas;
         if (mh->clients_normal / numclients > (1024*200)) {
             big_client_buf = 1;
             num_reports++;
         }
 
-        /* Slaves using more than 10 MB each? */
-        if (numslaves > 0 && mh->clients_slaves / numslaves > (1024*1024*10)) {
-            big_slave_buf = 1;
+        /* Replicas using more than 10 MB each? */
+        if (numreplicas > 0 && mh->clients_replicas / numreplicas > (1024*1024*10)) {
+            big_replica_buf = 1;
             num_reports++;
         }
 
@@ -1174,8 +1174,8 @@ sds getMemoryDoctorReport(void) {
         if (high_proc_rss) {
             s = sdscatprintf(s," * High process RSS overhead: This instance has non-allocator RSS memory overhead is greater than 1.1 (this means that the Resident Set Size of the Redis process is much larger than the RSS the allocator holds). This problem may be due to Lua scripts or Modules.\n\n");
         }
-        if (big_slave_buf) {
-            s = sdscat(s," * Big slave buffers: The slave output buffers in this instance are greater than 10MB for each slave (on average). This likely means that there is some slave instance that is struggling receiving data, either because it is too slow or because of networking issues. As a result, data piles on the master output buffers. Please try to identify what slave is not receiving data correctly and why. You can use the INFO output in order to check the slaves delays and the CLIENT LIST command to check the output buffers of each slave.\n\n");
+        if (big_replica_buf) {
+            s = sdscat(s," * Big replica buffers: The replica output buffers in this instance are greater than 10MB for each replica (on average). This likely means that there is some replica instance that is struggling receiving data, either because it is too slow or because of networking issues. As a result, data piles on the primary output buffers. Please try to identify what replica is not receiving data correctly and why. You can use the INFO output in order to check the replicas delays and the CLIENT LIST command to check the output buffers of each replica.\n\n");
         }
         if (big_client_buf) {
             s = sdscat(s," * Big client buffers: The clients output buffers in this instance are greater than 200K per client (on average). This may result from different causes, like Pub/Sub clients subscribed to channels bot not receiving data fast enough, so that data piles on the Redis instance output buffer, or clients sending commands with large replies or very large sequences of commands in the same pipeline. Please use the CLIENT LIST command in order to investigate the issue if it causes problems in your instance, or to understand better why certain clients are using a big amount of memory.\n\n");
@@ -1329,8 +1329,8 @@ void memoryCommand(client *c) {
         addReplyBulkCString(c,"replication.backlog");
         addReplyLongLong(c,mh->repl_backlog);
 
-        addReplyBulkCString(c,"clients.slaves");
-        addReplyLongLong(c,mh->clients_slaves);
+        addReplyBulkCString(c,"clients.replicas");
+        addReplyLongLong(c,mh->clients_replicas);
 
         addReplyBulkCString(c,"clients.normal");
         addReplyLongLong(c,mh->clients_normal);

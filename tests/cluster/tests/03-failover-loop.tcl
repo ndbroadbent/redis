@@ -22,31 +22,31 @@ while {[incr iterations -1]} {
     set key [randstring 20 20 alpha]
     set val [randstring 20 20 alpha]
     set role [RI $tokill role]
-    if {$role eq {master}} {
-        set slave {}
+    if {$role eq {primary}} {
+        set replica {}
         set myid [dict get [get_myself $tokill] id]
         foreach_redis_id id {
             if {$id == $tokill} continue
-            if {[dict get [get_myself $id] slaveof] eq $myid} {
-                set slave $id
+            if {[dict get [get_myself $id] replicaof] eq $myid} {
+                set replica $id
             }
         }
-        if {$slave eq {}} {
-            fail "Unable to retrieve slave's ID for master #$tokill"
+        if {$replica eq {}} {
+            fail "Unable to retrieve replica's ID for primary #$tokill"
         }
     }
 
     puts "--- Iteration $iterations ---"
 
-    if {$role eq {master}} {
-        test "Wait for slave of #$tokill to sync" {
+    if {$role eq {primary}} {
+        test "Wait for replica of #$tokill to sync" {
             wait_for_condition 1000 50 {
-                [string match {*state=online*} [RI $tokill slave0]]
+                [string match {*state=online*} [RI $tokill replica0]]
             } else {
-                fail "Slave of node #$tokill is not ok"
+                fail "Replica of node #$tokill is not ok"
             }
         }
-        set slave_config_epoch [CI $slave cluster_my_epoch]
+        set replica_config_epoch [CI $replica cluster_my_epoch]
     }
 
     test "Cluster is writable before failover" {
@@ -54,9 +54,9 @@ while {[incr iterations -1]} {
             catch {$cluster set $key:$i $val:$i} err
             assert {$err eq {OK}}
         }
-        # Wait for the write to propagate to the slave if we
-        # are going to kill a master.
-        if {$role eq {master}} {
+        # Wait for the write to propagate to the replica if we
+        # are going to kill a primary.
+        if {$role eq {primary}} {
             R $tokill wait 1 20000
         }
     }
@@ -65,12 +65,12 @@ while {[incr iterations -1]} {
         kill_instance redis $tokill
     }
 
-    if {$role eq {master}} {
-        test "Wait failover by #$slave with old epoch $slave_config_epoch" {
+    if {$role eq {primary}} {
+        test "Wait failover by #$replica with old epoch $replica_config_epoch" {
             wait_for_condition 1000 50 {
-                [CI $slave cluster_my_epoch] > $slave_config_epoch
+                [CI $replica cluster_my_epoch] > $replica_config_epoch
             } else {
-                fail "No failover detected, epoch is still [CI $slave cluster_my_epoch]"
+                fail "No failover detected, epoch is still [CI $replica cluster_my_epoch]"
             }
         }
     }
@@ -90,11 +90,11 @@ while {[incr iterations -1]} {
         restart_instance redis $tokill
     }
 
-    test "Instance #$tokill is now a slave" {
+    test "Instance #$tokill is now a replica" {
         wait_for_condition 1000 50 {
-            [RI $tokill role] eq {slave}
+            [RI $tokill role] eq {replica}
         } else {
-            fail "Restarted instance is not a slave"
+            fail "Restarted instance is not a replica"
         }
     }
 

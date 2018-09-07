@@ -479,7 +479,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         goto cleanup;
     }
 
-    /* Write commands are forbidden against read-only slaves, or if a
+    /* Write commands are forbidden against read-only replicas, or if a
      * command marked as non-deterministic was already called in the context
      * of this script. */
     if (cmd->flags & CMD_WRITE) {
@@ -488,11 +488,11 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
             luaPushError(lua,
                 "Write commands not allowed after non deterministic commands. Call redis.replicate_commands() at the start of your script in order to switch to single commands replication mode.");
             goto cleanup;
-        } else if (server.masterhost && server.repl_slave_ro &&
+        } else if (server.primaryhost && server.repl_replica_ro &&
                    !server.loading &&
-                   !(server.lua_caller->flags & CLIENT_MASTER))
+                   !(server.lua_caller->flags & CLIENT_PRIMARY))
         {
-            luaPushError(lua, shared.roslaveerr->ptr);
+            luaPushError(lua, shared.roreplicaerr->ptr);
             goto cleanup;
         } else if (deny_write_type != DISK_ERROR_TYPE_NONE) {
             if (deny_write_type == DISK_ERROR_TYPE_RDB) {
@@ -514,7 +514,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
      * in the middle. */
     if (server.maxmemory &&             /* Maxmemory is actually enabled. */
         !server.loading &&              /* Don't care about mem if loading. */
-        !server.masterhost &&           /* Slave must execute the script. */
+        !server.primaryhost &&           /* Replica must execute the script. */
         server.lua_write_dirty == 0 &&  /* Script had no side effects so far. */
         (cmd->flags & CMD_DENYOOM))
     {
@@ -529,9 +529,9 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
 
     /* If this is a Redis Cluster node, we need to make sure Lua is not
      * trying to access non-local keys, with the exception of commands
-     * received from our master or when loading the AOF back in memory. */
+     * received from our primary or when loading the AOF back in memory. */
     if (server.cluster_enabled && !server.loading &&
-        !(server.lua_caller->flags & CLIENT_MASTER))
+        !(server.lua_caller->flags & CLIENT_PRIMARY))
     {
         /* Duplicate relevant flags in the lua client. */
         c->flags &= ~(CLIENT_READONLY|CLIENT_ASKING);
@@ -548,7 +548,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
 
     /* If we are using single commands replication, we need to wrap what
      * we propagate into a MULTI/EXEC block, so that it will be atomic like
-     * a Lua script in the context of AOF and slaves. */
+     * a Lua script in the context of AOF and replicas. */
     if (server.lua_replicate_commands &&
         !server.lua_multi_emitted &&
         !(server.lua_caller->flags & CLIENT_MULTI) &&
@@ -762,7 +762,7 @@ int luaRedisDebugCommand(lua_State *lua) {
 /* redis.set_repl()
  *
  * Set the propagation of write commands executed in the context of the
- * script to on/off for AOF and slaves. */
+ * script to on/off for AOF and replicas. */
 int luaRedisSetReplCommand(lua_State *lua) {
     int argc = lua_gettop(lua);
     int flags;
@@ -777,7 +777,7 @@ int luaRedisSetReplCommand(lua_State *lua) {
 
     flags = lua_tonumber(lua,-1);
     if ((flags & ~(PROPAGATE_AOF|PROPAGATE_REPL)) != 0) {
-        lua_pushstring(lua, "Invalid replication flags. Use REPL_AOF, REPL_SLAVE, REPL_ALL or REPL_NONE.");
+        lua_pushstring(lua, "Invalid replication flags. Use REPL_AOF, REPL_REPLICA, REPL_ALL or REPL_NONE.");
         return lua_error(lua);
     }
     server.lua_repl = flags;
@@ -994,7 +994,7 @@ void scriptingInit(int setup) {
     lua_pushnumber(lua,PROPAGATE_AOF);
     lua_settable(lua,-3);
 
-    lua_pushstring(lua,"REPL_SLAVE");
+    lua_pushstring(lua,"REPL_REPLICA");
     lua_pushnumber(lua,PROPAGATE_REPL);
     lua_settable(lua,-3);
 
@@ -1370,8 +1370,8 @@ void evalGenericCommand(client *c, int evalsha) {
          * script timeout was detected. */
         aeCreateFileEvent(server.el,c->fd,AE_READABLE,
                           readQueryFromClient,c);
-        if (server.masterhost && server.master)
-            queueClientForReprocessing(server.master);
+        if (server.primaryhost && server.primary)
+            queueClientForReprocessing(server.primary);
     }
     server.lua_caller = NULL;
 
@@ -1416,21 +1416,21 @@ void evalGenericCommand(client *c, int evalsha) {
         }
     }
 
-    /* EVALSHA should be propagated to Slave and AOF file as full EVAL, unless
+    /* EVALSHA should be propagated to Replica and AOF file as full EVAL, unless
      * we are sure that the script was already in the context of all the
-     * attached slaves *and* the current AOF file if enabled.
+     * attached replicas *and* the current AOF file if enabled.
      *
      * To do so we use a cache of SHA1s of scripts that we already propagated
      * as full EVAL, that's called the Replication Script Cache.
      *
-     * For repliation, everytime a new slave attaches to the master, we need to
+     * For repliation, everytime a new replica attaches to the primary, we need to
      * flush our cache of scripts that can be replicated as EVALSHA, while
      * for AOF we need to do so every time we rewrite the AOF file. */
     if (evalsha && !server.lua_replicate_commands) {
         if (!replicationScriptCacheExists(c->argv[1]->ptr)) {
             /* This script is not in our script cache, replicate it as
              * EVAL, then add it into the script cache, as from now on
-             * slaves and AOF know about it. */
+             * replicas and AOF know about it. */
             robj *script = dictFetchValue(server.lua_scripts,c->argv[1]->ptr);
 
             replicationScriptCacheAdd(c->argv[1]->ptr);
@@ -1438,8 +1438,8 @@ void evalGenericCommand(client *c, int evalsha) {
 
             /* If the script did not produce any changes in the dataset we want
              * just to replicate it as SCRIPT LOAD, otherwise we risk running
-             * an aborted script on slaves (that may then produce results there)
-             * or just running a CPU costly read-only script on the slaves. */
+             * an aborted script on replicas (that may then produce results there)
+             * or just running a CPU costly read-only script on the replicas. */
             if (server.dirty == initial_server_dirty) {
                 rewriteClientCommandVector(c,3,
                     resetRefCount(createStringObject("SCRIPT",6)),
@@ -1484,7 +1484,7 @@ void scriptCommand(client *c) {
         const char *help[] = {
 "DEBUG (yes|sync|no) -- Set the debug mode for subsequent scripts executed.",
 "EXISTS <sha1> [<sha1> ...] -- Return information about the existence of the scripts in the script cache.",
-"FLUSH -- Flush the Lua scripts cache. Very dangerous on slaves.",
+"FLUSH -- Flush the Lua scripts cache. Very dangerous on replicas.",
 "KILL -- Kill the currently executing Lua script.",
 "LOAD <script> -- Load a script into the scripts cache, without executing it.",
 NULL
@@ -1513,8 +1513,8 @@ NULL
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"kill")) {
         if (server.lua_caller == NULL) {
             addReplySds(c,sdsnew("-NOTBUSY No scripts in execution right now.\r\n"));
-        } else if (server.lua_caller->flags & CLIENT_MASTER) {
-            addReplySds(c,sdsnew("-UNKILLABLE The busy script was sent by a master instance in the context of replication and cannot be killed.\r\n"));
+        } else if (server.lua_caller->flags & CLIENT_PRIMARY) {
+            addReplySds(c,sdsnew("-UNKILLABLE The busy script was sent by a primary instance in the context of replication and cannot be killed.\r\n"));
         } else if (server.lua_write_dirty) {
             addReplySds(c,sdsnew("-UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.\r\n"));
         } else {

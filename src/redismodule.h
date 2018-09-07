@@ -65,11 +65,11 @@
 #define REDISMODULE_CTX_FLAGS_LUA (1<<0)
 /* The command is running inside a Redis transaction */
 #define REDISMODULE_CTX_FLAGS_MULTI (1<<1)
-/* The instance is a master */
-#define REDISMODULE_CTX_FLAGS_MASTER (1<<2)
-/* The instance is a slave */
-#define REDISMODULE_CTX_FLAGS_SLAVE (1<<3)
-/* The instance is read-only (usually meaning it's a slave as well) */
+/* The instance is a primary */
+#define REDISMODULE_CTX_FLAGS_PRIMARY (1<<2)
+/* The instance is a replica */
+#define REDISMODULE_CTX_FLAGS_REPLICA (1<<3)
+/* The instance is read-only (usually meaning it's a replica as well) */
 #define REDISMODULE_CTX_FLAGS_READONLY (1<<4)
 /* The instance is running in cluster mode */
 #define REDISMODULE_CTX_FLAGS_CLUSTER (1<<5)
@@ -111,8 +111,8 @@
 /* Cluster API defines. */
 #define REDISMODULE_NODE_ID_LEN 40
 #define REDISMODULE_NODE_MYSELF     (1<<0)
-#define REDISMODULE_NODE_MASTER     (1<<1)
-#define REDISMODULE_NODE_SLAVE      (1<<2)
+#define REDISMODULE_NODE_PRIMARY     (1<<1)
+#define REDISMODULE_NODE_REPLICA      (1<<2)
 #define REDISMODULE_NODE_PFAIL      (1<<3)
 #define REDISMODULE_NODE_FAIL       (1<<4)
 #define REDISMODULE_NODE_NOFAILOVER (1<<5)
@@ -292,7 +292,7 @@ int REDISMODULE_API_FUNC(RedisModule_SubscribeToKeyspaceEvents)(RedisModuleCtx *
 int REDISMODULE_API_FUNC(RedisModule_BlockedClientDisconnected)(RedisModuleCtx *ctx);
 void REDISMODULE_API_FUNC(RedisModule_RegisterClusterMessageReceiver)(RedisModuleCtx *ctx, uint8_t type, RedisModuleClusterMessageReceiver callback);
 int REDISMODULE_API_FUNC(RedisModule_SendClusterMessage)(RedisModuleCtx *ctx, char *target_id, uint8_t type, unsigned char *msg, uint32_t len);
-int REDISMODULE_API_FUNC(RedisModule_GetClusterNodeInfo)(RedisModuleCtx *ctx, const char *id, char *ip, char *master_id, int *port, int *flags);
+int REDISMODULE_API_FUNC(RedisModule_GetClusterNodeInfo)(RedisModuleCtx *ctx, const char *id, char *ip, char *primary_id, int *port, int *flags);
 char **REDISMODULE_API_FUNC(RedisModule_GetClusterNodesList)(RedisModuleCtx *ctx, size_t *numnodes);
 void REDISMODULE_API_FUNC(RedisModule_FreeClusterNodesList)(char **ids);
 RedisModuleTimerID REDISMODULE_API_FUNC(RedisModule_CreateTimer)(RedisModuleCtx *ctx, mstime_t period, RedisModuleTimerProc callback, void *data);

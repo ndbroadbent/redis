@@ -346,21 +346,21 @@ unsigned long LFUDecrAndReturn(robj *o) {
  * server when there is data to add in order to make space if needed.
  * --------------------------------------------------------------------------*/
 
-/* We don't want to count AOF buffers and slaves output buffers as
+/* We don't want to count AOF buffers and replicas output buffers as
  * used memory: the eviction should use mostly data size. This function
- * returns the sum of AOF and slaves buffer. */
+ * returns the sum of AOF and replicas buffer. */
 size_t freeMemoryGetNotCountedMemory(void) {
     size_t overhead = 0;
-    int slaves = listLength(server.slaves);
+    int replicas = listLength(server.replicas);
 
-    if (slaves) {
+    if (replicas) {
         listIter li;
         listNode *ln;
 
-        listRewind(server.slaves,&li);
+        listRewind(server.replicas,&li);
         while((ln = listNext(&li))) {
-            client *slave = listNodeValue(ln);
-            overhead += getClientOutputBufferMemoryUsage(slave);
+            client *replica = listNodeValue(ln);
+            overhead += getClientOutputBufferMemoryUsage(replica);
         }
     }
     if (server.aof_state != AOF_OFF) {
@@ -381,7 +381,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
  *  'total'     total amount of bytes used.
  *              (Populated both for C_ERR and C_OK)
  *
- *  'logical'   the amount of memory used minus the slaves/AOF buffers.
+ *  'logical'   the amount of memory used minus the replicas/AOF buffers.
  *              (Populated when C_ERR is returned)
  *
  *  'tofree'    the amount of memory that should be released
@@ -397,7 +397,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     size_t mem_reported, mem_used, mem_tofree;
 
     /* Check if we are over the memory usage limit. If we are not, no need
-     * to subtract the slaves output buffers. We can just return ASAP. */
+     * to subtract the replicas output buffers. We can just return ASAP. */
     mem_reported = zmalloc_used_memory();
     if (total) *total = mem_reported;
 
@@ -405,7 +405,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     int return_ok_asap = !server.maxmemory || mem_reported <= server.maxmemory;
     if (return_ok_asap && !level) return C_OK;
 
-    /* Remove the size of slaves output buffers and AOF buffer from the
+    /* Remove the size of replicas output buffers and AOF buffer from the
      * count of used memory. */
     mem_used = mem_reported;
     size_t overhead = freeMemoryGetNotCountedMemory();
@@ -444,14 +444,14 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
  * Otehrwise if we are over the memory limit, but not enough memory
  * was freed to return back under the limit, the function returns C_ERR. */
 int freeMemoryIfNeeded(void) {
-    /* By default slaves should ignore maxmemory and just be masters excat
+    /* By default replicas should ignore maxmemory and just be primaries excat
      * copies. */
-    if (server.masterhost && server.repl_slave_ignore_maxmemory) return C_OK;
+    if (server.primaryhost && server.repl_replica_ignore_maxmemory) return C_OK;
 
     size_t mem_reported, mem_tofree, mem_freed;
     mstime_t latency, eviction_latency;
     long long delta;
-    int slaves = listLength(server.slaves);
+    int replicas = listLength(server.replicas);
 
     /* When clients are paused the dataset should be static not just from the
      * POV of clients not being able to write, but also from the POV of
@@ -581,9 +581,9 @@ int freeMemoryIfNeeded(void) {
 
             /* When the memory to free starts to be big enough, we may
              * start spending so much time here that is impossible to
-             * deliver data to the slaves fast enough, so we force the
+             * deliver data to the replicas fast enough, so we force the
              * transmission here inside the loop. */
-            if (slaves) flushSlavesOutputBuffers();
+            if (replicas) flushReplicasOutputBuffers();
 
             /* Normally our stop condition is the ability to release
              * a fixed, pre-computed amount of memory. However when we

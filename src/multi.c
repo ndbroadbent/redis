@@ -101,7 +101,7 @@ void discardCommand(client *c) {
     addReply(c,shared.ok);
 }
 
-/* Send a MULTI command to all the slaves and AOF file. Check the execCommand
+/* Send a MULTI command to all the replicas and AOF file. Check the execCommand
  * implementation for more information. */
 void execCommandPropagateMulti(client *c) {
     robj *multistring = createStringObject("MULTI",5);
@@ -116,8 +116,8 @@ void execCommand(client *c) {
     robj **orig_argv;
     int orig_argc;
     struct redisCommand *orig_cmd;
-    int must_propagate = 0; /* Need to propagate MULTI/EXEC to AOF / slaves? */
-    int was_master = server.masterhost == NULL;
+    int must_propagate = 0; /* Need to propagate MULTI/EXEC to AOF / replicas? */
+    int was_primary = server.primaryhost == NULL;
 
     if (!(c->flags & CLIENT_MULTI)) {
         addReplyError(c,"EXEC without MULTI");
@@ -173,14 +173,14 @@ void execCommand(client *c) {
     /* Make sure the EXEC command will be propagated as well if MULTI
      * was already propagated. */
     if (must_propagate) {
-        int is_master = server.masterhost == NULL;
+        int is_primary = server.primaryhost == NULL;
         server.dirty++;
         /* If inside the MULTI/EXEC block this instance was suddenly
-         * switched from master to slave (using the SLAVEOF command), the
+         * switched from primary to replica (using the REPLICAOF command), the
          * initial MULTI was propagated into the replication backlog, but the
          * rest was not. We need to make sure to at least terminate the
          * backlog with the final EXEC. */
-        if (server.repl_backlog && was_master && !is_master) {
+        if (server.repl_backlog && was_primary && !is_primary) {
             char *execcmd = "*1\r\n$4\r\nEXEC\r\n";
             feedReplicationBacklog(execcmd,strlen(execcmd));
         }

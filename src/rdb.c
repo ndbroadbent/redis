@@ -1084,7 +1084,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int flags, rdbSaveInfo *rsi) {
             == -1) return -1;
         if (rdbSaveAuxFieldStrStr(rdb,"repl-id",server.replid)
             == -1) return -1;
-        if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",server.master_repl_offset)
+        if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",server.primary_repl_offset)
             == -1) return -1;
     }
     if (rdbSaveAuxFieldStrInt(rdb,"aof-preamble",aof_preamble) == -1) return -1;
@@ -1161,7 +1161,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
     /* If we are storing the replication information on disk, persist
      * the script cache as well: on successful PSYNC after a restart, we need
      * to be able to process any EVALSHA inside the replication backlog the
-     * master will send us. */
+     * primary will send us. */
     if (rsi && dictSize(server.lua_scripts)) {
         di = dictGetIterator(server.lua_scripts);
         while((de = dictNext(di)) != NULL) {
@@ -1641,7 +1641,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
         uint64_t listpacks = rdbLoadLen(rdb,NULL);
 
         while(listpacks--) {
-            /* Get the master ID, the one we'll use as key of the radix tree
+            /* Get the primary ID, the one we'll use as key of the radix tree
              * node: the entries inside the listpack itself are delta-encoded
              * relatively to this ID. */
             sds nodekey = rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL);
@@ -1835,8 +1835,8 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
          * our cached time since it is used to create and update the last
          * interaction time with clients and for other important things. */
         updateCachedTime();
-        if (server.masterhost && server.repl_state == REPL_STATE_TRANSFER)
-            replicationSendNewlineToMaster();
+        if (server.primaryhost && server.repl_state == REPL_STATE_TRANSFER)
+            replicationSendNewlineToPrimary();
         loadingProgress(r->processed_bytes);
         processEventsWhileBlocked();
     }
@@ -2006,10 +2006,10 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
         if ((val = rdbLoadObject(type,rdb)) == NULL) goto eoferr;
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
-         * received from the master. In the latter case, the master is
+         * received from the primary. In the latter case, the primary is
          * responsible for key expiry. If we would expire keys here, the
-         * snapshot taken by the master may not be reflected on the slave. */
-        if (server.masterhost == NULL && !loading_aof && expiretime != -1 && expiretime < now) {
+         * snapshot taken by the primary may not be reflected on the replica. */
+        if (server.primaryhost == NULL && !loading_aof && expiretime != -1 && expiretime < now) {
             decrRefCount(key);
             decrRefCount(val);
         } else {
@@ -2107,16 +2107,16 @@ void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal) {
     server.rdb_child_type = RDB_CHILD_TYPE_NONE;
     server.rdb_save_time_last = time(NULL)-server.rdb_save_time_start;
     server.rdb_save_time_start = -1;
-    /* Possibly there are slaves waiting for a BGSAVE in order to be served
+    /* Possibly there are replicas waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
-    updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_DISK);
+    updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_DISK);
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.
  * This function covers the case of RDB -> Salves socket transfers for
  * diskless replication. */
 void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
-    uint64_t *ok_slaves;
+    uint64_t *ok_replicas;
 
     if (!bysignal && exitcode == 0) {
         serverLog(LL_NOTICE,
@@ -2131,31 +2131,31 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
     server.rdb_child_type = RDB_CHILD_TYPE_NONE;
     server.rdb_save_time_start = -1;
 
-    /* If the child returns an OK exit code, read the set of slave client
-     * IDs and the associated status code. We'll terminate all the slaves
+    /* If the child returns an OK exit code, read the set of replica client
+     * IDs and the associated status code. We'll terminate all the replicas
      * in error state.
      *
-     * If the process returned an error, consider the list of slaves that
+     * If the process returned an error, consider the list of replicas that
      * can continue to be empty, so that it's just a special case of the
      * normal code path. */
-    ok_slaves = zmalloc(sizeof(uint64_t)); /* Make space for the count. */
-    ok_slaves[0] = 0;
+    ok_replicas = zmalloc(sizeof(uint64_t)); /* Make space for the count. */
+    ok_replicas[0] = 0;
     if (!bysignal && exitcode == 0) {
         int readlen = sizeof(uint64_t);
 
-        if (read(server.rdb_pipe_read_result_from_child, ok_slaves, readlen) ==
+        if (read(server.rdb_pipe_read_result_from_child, ok_replicas, readlen) ==
                  readlen)
         {
-            readlen = ok_slaves[0]*sizeof(uint64_t)*2;
+            readlen = ok_replicas[0]*sizeof(uint64_t)*2;
 
             /* Make space for enough elements as specified by the first
              * uint64_t element in the array. */
-            ok_slaves = zrealloc(ok_slaves,sizeof(uint64_t)+readlen);
+            ok_replicas = zrealloc(ok_replicas,sizeof(uint64_t)+readlen);
             if (readlen &&
-                read(server.rdb_pipe_read_result_from_child, ok_slaves+1,
+                read(server.rdb_pipe_read_result_from_child, ok_replicas+1,
                      readlen) != readlen)
             {
-                ok_slaves[0] = 0;
+                ok_replicas[0] = 0;
             }
         }
     }
@@ -2163,48 +2163,48 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
     close(server.rdb_pipe_read_result_from_child);
     close(server.rdb_pipe_write_result_to_parent);
 
-    /* We can continue the replication process with all the slaves that
+    /* We can continue the replication process with all the replicas that
      * correctly received the full payload. Others are terminated. */
     listNode *ln;
     listIter li;
 
-    listRewind(server.slaves,&li);
+    listRewind(server.replicas,&li);
     while((ln = listNext(&li))) {
-        client *slave = ln->value;
+        client *replica = ln->value;
 
-        if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
+        if (replica->replstate == REPLICA_STATE_WAIT_BGSAVE_END) {
             uint64_t j;
             int errorcode = 0;
 
-            /* Search for the slave ID in the reply. In order for a slave to
+            /* Search for the replica ID in the reply. In order for a replica to
              * continue the replication process, we need to find it in the list,
              * and it must have an error code set to 0 (which means success). */
-            for (j = 0; j < ok_slaves[0]; j++) {
-                if (slave->id == ok_slaves[2*j+1]) {
-                    errorcode = ok_slaves[2*j+2];
-                    break; /* Found in slaves list. */
+            for (j = 0; j < ok_replicas[0]; j++) {
+                if (replica->id == ok_replicas[2*j+1]) {
+                    errorcode = ok_replicas[2*j+2];
+                    break; /* Found in replicas list. */
                 }
             }
-            if (j == ok_slaves[0] || errorcode != 0) {
+            if (j == ok_replicas[0] || errorcode != 0) {
                 serverLog(LL_WARNING,
-                "Closing slave %s: child->slave RDB transfer failed: %s",
-                    replicationGetSlaveName(slave),
+                "Closing replica %s: child->replica RDB transfer failed: %s",
+                    replicationGetReplicaName(replica),
                     (errorcode == 0) ? "RDB transfer child aborted"
                                      : strerror(errorcode));
-                freeClient(slave);
+                freeClient(replica);
             } else {
                 serverLog(LL_WARNING,
-                "Slave %s correctly received the streamed RDB file.",
-                    replicationGetSlaveName(slave));
+                "Replica %s correctly received the streamed RDB file.",
+                    replicationGetReplicaName(replica));
                 /* Restore the socket as non-blocking. */
-                anetNonBlock(NULL,slave->fd);
-                anetSendTimeout(NULL,slave->fd,0);
+                anetNonBlock(NULL,replica->fd);
+                anetSendTimeout(NULL,replica->fd,0);
             }
         }
     }
-    zfree(ok_slaves);
+    zfree(ok_replicas);
 
-    updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_SOCKET);
+    updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, RDB_CHILD_TYPE_SOCKET);
 }
 
 /* When a background RDB saving/transfer terminates, call the right handler. */
@@ -2222,9 +2222,9 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     }
 }
 
-/* Spawn an RDB child that writes the RDB to the sockets of the slaves
- * that are currently in SLAVE_STATE_WAIT_BGSAVE_START state. */
-int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
+/* Spawn an RDB child that writes the RDB to the sockets of the replicas
+ * that are currently in REPLICA_STATE_WAIT_BGSAVE_START state. */
+int rdbSaveToReplicasSockets(rdbSaveInfo *rsi) {
     int *fds;
     uint64_t *clientids;
     int numfds;
@@ -2237,34 +2237,34 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     if (server.aof_child_pid != -1 || server.rdb_child_pid != -1) return C_ERR;
 
     /* Before to fork, create a pipe that will be used in order to
-     * send back to the parent the IDs of the slaves that successfully
+     * send back to the parent the IDs of the replicas that successfully
      * received all the writes. */
     if (pipe(pipefds) == -1) return C_ERR;
     server.rdb_pipe_read_result_from_child = pipefds[0];
     server.rdb_pipe_write_result_to_parent = pipefds[1];
 
-    /* Collect the file descriptors of the slaves we want to transfer
+    /* Collect the file descriptors of the replicas we want to transfer
      * the RDB to, which are i WAIT_BGSAVE_START state. */
-    fds = zmalloc(sizeof(int)*listLength(server.slaves));
+    fds = zmalloc(sizeof(int)*listLength(server.replicas));
     /* We also allocate an array of corresponding client IDs. This will
      * be useful for the child process in order to build the report
      * (sent via unix pipe) that will be sent to the parent. */
-    clientids = zmalloc(sizeof(uint64_t)*listLength(server.slaves));
+    clientids = zmalloc(sizeof(uint64_t)*listLength(server.replicas));
     numfds = 0;
 
-    listRewind(server.slaves,&li);
+    listRewind(server.replicas,&li);
     while((ln = listNext(&li))) {
-        client *slave = ln->value;
+        client *replica = ln->value;
 
-        if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
-            clientids[numfds] = slave->id;
-            fds[numfds++] = slave->fd;
-            replicationSetupSlaveForFullResync(slave,getPsyncInitialOffset());
+        if (replica->replstate == REPLICA_STATE_WAIT_BGSAVE_START) {
+            clientids[numfds] = replica->id;
+            fds[numfds++] = replica->fd;
+            replicationSetupReplicaForFullResync(replica,getPsyncInitialOffset());
             /* Put the socket in blocking mode to simplify RDB transfer.
              * We'll restore it when the children returns (since duped socket
              * will share the O_NONBLOCK attribute with the parent). */
-            anetBlock(NULL,slave->fd);
-            anetSendTimeout(NULL,slave->fd,server.repl_timeout*1000);
+            anetBlock(NULL,replica->fd);
+            anetSendTimeout(NULL,replica->fd,server.repl_timeout*1000);
         }
     }
 
@@ -2274,16 +2274,16 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     if ((childpid = fork()) == 0) {
         /* Child */
         int retval;
-        rio slave_sockets;
+        rio replica_sockets;
 
-        rioInitWithFdset(&slave_sockets,fds,numfds);
+        rioInitWithFdset(&replica_sockets,fds,numfds);
         zfree(fds);
 
         closeListeningSockets(0);
-        redisSetProcTitle("redis-rdb-to-slaves");
+        redisSetProcTitle("redis-rdb-to-replicas");
 
-        retval = rdbSaveRioWithEOFMark(&slave_sockets,NULL,rsi);
-        if (retval == C_OK && rioFlush(&slave_sockets) == 0)
+        retval = rdbSaveRioWithEOFMark(&replica_sockets,NULL,rsi);
+        if (retval == C_OK && rioFlush(&replica_sockets) == 0)
             retval = C_ERR;
 
         if (retval == C_OK) {
@@ -2298,19 +2298,19 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
             server.child_info_data.cow_size = private_dirty;
             sendChildInfo(CHILD_INFO_TYPE_RDB);
 
-            /* If we are returning OK, at least one slave was served
+            /* If we are returning OK, at least one replica was served
              * with the RDB file as expected, so we need to send a report
              * to the parent via the pipe. The format of the message is:
              *
-             * <len> <slave[0].id> <slave[0].error> ...
+             * <len> <replica[0].id> <replica[0].error> ...
              *
-             * len, slave IDs, and slave errors, are all uint64_t integers,
+             * len, replica IDs, and replica errors, are all uint64_t integers,
              * so basically the reply is composed of 64 bits for the len field
              * plus 2 additional 64 bit integers for each entry, for a total
              * of 'len' entries.
              *
-             * The 'id' represents the slave's client ID, so that the master
-             * can match the report with a specific slave, and 'error' is
+             * The 'id' represents the replica's client ID, so that the primary
+             * can match the report with a specific replica, and 'error' is
              * set to 0 if the replication process terminated with a success
              * or the error code if an error occurred. */
             void *msg = zmalloc(sizeof(uint64_t)*(1+2*numfds));
@@ -2321,10 +2321,10 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
             *len = numfds;
             for (j = 0; j < numfds; j++) {
                 *ids++ = clientids[j];
-                *ids++ = slave_sockets.io.fdset.state[j];
+                *ids++ = replica_sockets.io.fdset.state[j];
             }
 
-            /* Write the message to the parent. If we have no good slaves or
+            /* Write the message to the parent. If we have no good replicas or
              * we are unable to transfer the message to the parent, we exit
              * with an error so that the parent will abort the replication
              * process with all the childre that were waiting. */
@@ -2338,7 +2338,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
             zfree(msg);
         }
         zfree(clientids);
-        rioFreeFdset(&slave_sockets);
+        rioFreeFdset(&replica_sockets);
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
@@ -2347,16 +2347,16 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
                 strerror(errno));
 
             /* Undo the state change. The caller will perform cleanup on
-             * all the slaves in BGSAVE_START state, but an early call to
-             * replicationSetupSlaveForFullResync() turned it into BGSAVE_END */
-            listRewind(server.slaves,&li);
+             * all the replicas in BGSAVE_START state, but an early call to
+             * replicationSetupReplicaForFullResync() turned it into BGSAVE_END */
+            listRewind(server.replicas,&li);
             while((ln = listNext(&li))) {
-                client *slave = ln->value;
+                client *replica = ln->value;
                 int j;
 
                 for (j = 0; j < numfds; j++) {
-                    if (slave->id == clientids[j]) {
-                        slave->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
+                    if (replica->id == clientids[j]) {
+                        replica->replstate = REPLICA_STATE_WAIT_BGSAVE_START;
                         break;
                     }
                 }
@@ -2436,48 +2436,48 @@ void bgsaveCommand(client *c) {
 
 /* Populate the rdbSaveInfo structure used to persist the replication
  * information inside the RDB file. Currently the structure explicitly
- * contains just the currently selected DB from the master stream, however
+ * contains just the currently selected DB from the primary stream, however
  * if the rdbSave*() family functions receive a NULL rsi structure also
  * the Replication ID/offset is not saved. The function popultes 'rsi'
  * that is normally stack-allocated in the caller, returns the populated
- * pointer if the instance has a valid master client, otherwise NULL
+ * pointer if the instance has a valid primary client, otherwise NULL
  * is returned, and the RDB saving will not persist any replication related
  * information. */
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
     rdbSaveInfo rsi_init = RDB_SAVE_INFO_INIT;
     *rsi = rsi_init;
 
-    /* If the instance is a master, we can populate the replication info
+    /* If the instance is a primary, we can populate the replication info
      * only when repl_backlog is not NULL. If the repl_backlog is NULL,
      * it means that the instance isn't in any replication chains. In this
-     * scenario the replication info is useless, because when a slave
+     * scenario the replication info is useless, because when a replica
      * connects to us, the NULL repl_backlog will trigger a full
      * synchronization, at the same time we will use a new replid and clear
      * replid2. */
-    if (!server.masterhost && server.repl_backlog) {
-        /* Note that when server.slaveseldb is -1, it means that this master
+    if (!server.primaryhost && server.repl_backlog) {
+        /* Note that when server.replicaseldb is -1, it means that this primary
          * didn't apply any write commands after a full synchronization.
-         * So we can let repl_stream_db be 0, this allows a restarted slave
+         * So we can let repl_stream_db be 0, this allows a restarted replica
          * to reload replication ID/offset, it's safe because the next write
          * command must generate a SELECT statement. */
-        rsi->repl_stream_db = server.slaveseldb == -1 ? 0 : server.slaveseldb;
+        rsi->repl_stream_db = server.replicaseldb == -1 ? 0 : server.replicaseldb;
         return rsi;
     }
 
-    /* If the instance is a slave we need a connected master
+    /* If the instance is a replica we need a connected primary
      * in order to fetch the currently selected DB. */
-    if (server.master) {
-        rsi->repl_stream_db = server.master->db->id;
+    if (server.primary) {
+        rsi->repl_stream_db = server.primary->db->id;
         return rsi;
     }
 
-    /* If we have a cached master we can use it in order to populate the
-     * replication selected DB info inside the RDB file: the slave can
-     * increment the master_repl_offset only from data arriving from the
-     * master, so if we are disconnected the offset in the cached master
+    /* If we have a cached primary we can use it in order to populate the
+     * replication selected DB info inside the RDB file: the replica can
+     * increment the primary_repl_offset only from data arriving from the
+     * primary, so if we are disconnected the offset in the cached primary
      * is valid. */
-    if (server.cached_master) {
-        rsi->repl_stream_db = server.cached_master->db->id;
+    if (server.cached_primary) {
+        rsi->repl_stream_db = server.cached_primary->db->id;
         return rsi;
     }
     return NULL;

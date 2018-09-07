@@ -31,10 +31,10 @@ proc test_cluster_publish {instance instances} {
     }
 }
 
-test "Test publishing to master" {
+test "Test publishing to primary" {
     test_cluster_publish 0 10
 }
 
-test "Test publishing to slave" {
+test "Test publishing to replica" {
     test_cluster_publish 5 10
 }

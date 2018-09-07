@@ -91,33 +91,33 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
  *  LOOKUP_NOTOUCH: don't alter the last access time of the key.
  *
  * Note: this function also returns NULL if the key is logically expired
- * but still existing, in case this is a slave, since this API is called only
- * for read operations. Even if the key expiry is master-driven, we can
- * correctly report a key is expired on slaves even if the master is lagging
+ * but still existing, in case this is a replica, since this API is called only
+ * for read operations. Even if the key expiry is primary-driven, we can
+ * correctly report a key is expired on replicas even if the primary is lagging
  * expiring our key via DELs in the replication link. */
 robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
     robj *val;
 
     if (expireIfNeeded(db,key) == 1) {
-        /* Key expired. If we are in the context of a master, expireIfNeeded()
+        /* Key expired. If we are in the context of a primary, expireIfNeeded()
          * returns 0 only when the key does not exist at all, so it's safe
          * to return NULL ASAP. */
-        if (server.masterhost == NULL) return NULL;
+        if (server.primaryhost == NULL) return NULL;
 
-        /* However if we are in the context of a slave, expireIfNeeded() will
+        /* However if we are in the context of a replica, expireIfNeeded() will
          * not really try to expire the key, it only returns information
          * about the "logical" status of the key: key expiring is up to the
-         * master in order to have a consistent view of master's data set.
+         * primary in order to have a consistent view of primary's data set.
          *
-         * However, if the command caller is not the master, and as additional
+         * However, if the command caller is not the primary, and as additional
          * safety measure, the command invoked is a read-only command, we can
          * safely return NULL here, and provide a more consistent behavior
          * to clients accessign expired values in a read-only fashion, that
          * will say the key as non existing.
          *
-         * Notably this covers GETs when slaves are used to scale reads. */
+         * Notably this covers GETs when replicas are used to scale reads. */
         if (server.current_client &&
-            server.current_client != server.master &&
+            server.current_client != server.primary &&
             server.current_client->cmd &&
             server.current_client->cmd->flags & CMD_READONLY)
         {
@@ -241,10 +241,10 @@ robj *dbRandomKey(redisDb *db) {
         key = dictGetKey(de);
         keyobj = createStringObject(key,sdslen(key));
         if (dictFind(db->expires,key)) {
-            if (allvolatile && server.masterhost && --maxtries == 0) {
+            if (allvolatile && server.primaryhost && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
-                 * expired in the slave, so the function cannot stop because
+                 * expired in the replica, so the function cannot stop because
                  * expireIfNeeded() is false, nor it can stop because
                  * dictGetRandomKey() returns NULL (there are keys to return).
                  * To prevent the infinite loop we do some tries, but if there
@@ -366,7 +366,7 @@ long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
             slotToKeyFlush();
         }
     }
-    if (dbnum == -1) flushSlaveKeysWithExpireList();
+    if (dbnum == -1) flushReplicaKeysWithExpireList();
     return removed;
 }
 
@@ -1076,9 +1076,9 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
     de = dictAddOrFind(db->expires,dictGetKey(kde));
     dictSetSignedIntegerVal(de,when);
 
-    int writable_slave = server.masterhost && server.repl_slave_ro == 0;
-    if (c && writable_slave && !(c->flags & CLIENT_MASTER))
-        rememberSlaveKeyWithExpire(db,key);
+    int writable_replica = server.primaryhost && server.repl_replica_ro == 0;
+    if (c && writable_replica && !(c->flags & CLIENT_PRIMARY))
+        rememberReplicaKeyWithExpire(db,key);
 }
 
 /* Return the expire time of the specified key, or -1 if no expire
@@ -1096,12 +1096,12 @@ long long getExpire(redisDb *db, robj *key) {
     return dictGetSignedIntegerVal(de);
 }
 
-/* Propagate expires into slaves and the AOF file.
- * When a key expires in the master, a DEL operation for this key is sent
- * to all the slaves and the AOF file if enabled.
+/* Propagate expires into replicas and the AOF file.
+ * When a key expires in the primary, a DEL operation for this key is sent
+ * to all the replicas and the AOF file if enabled.
  *
  * This way the key expiry is centralized in one place, and since both
- * AOF and the master->slave link guarantee operation ordering, everything
+ * AOF and the primary->replica link guarantee operation ordering, everything
  * will be consistent even if we allow write operations against expiring
  * keys. */
 void propagateExpire(redisDb *db, robj *key, int lazy) {
@@ -1114,7 +1114,7 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
 
     if (server.aof_state != AOF_OFF)
         feedAppendOnlyFile(server.delCommand,db->id,argv,2);
-    replicationFeedSlaves(server.slaves,db->id,argv,2);
+    replicationFeedReplicas(server.replicas,db->id,argv,2);
 
     decrRefCount(argv[0]);
     decrRefCount(argv[1]);
@@ -1126,14 +1126,14 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
  * is via lookupKey*() family of functions.
  *
  * The behavior of the function depends on the replication role of the
- * instance, because slave instances do not expire keys, they wait
- * for DELs from the master for consistency matters. However even
- * slaves will try to have a coherent return value for the function,
- * so that read commands executed in the slave side will be able to
+ * instance, because replica instances do not expire keys, they wait
+ * for DELs from the primary for consistency matters. However even
+ * replicas will try to have a coherent return value for the function,
+ * so that read commands executed in the replica side will be able to
  * behave like if the key is expired even if still present (because the
- * master has yet to propagate the DEL).
+ * primary has yet to propagate the DEL).
  *
- * In masters as a side effect of finding a key which is expired, such
+ * In primaries as a side effect of finding a key which is expired, such
  * key will be evicted from the database. Also this may trigger the
  * propagation of a DEL/UNLINK command in AOF / replication stream.
  *
@@ -1151,18 +1151,18 @@ int expireIfNeeded(redisDb *db, robj *key) {
     /* If we are in the context of a Lua script, we pretend that time is
      * blocked to when the Lua script started. This way a key can expire
      * only the first time it is accessed and not in the middle of the
-     * script execution, making propagation to slaves / AOF consistent.
+     * script execution, making propagation to replicas / AOF consistent.
      * See issue #1525 on Github for more information. */
     now = server.lua_caller ? server.lua_time_start : mstime();
 
-    /* If we are running in the context of a slave, return ASAP:
-     * the slave key expiration is controlled by the master that will
+    /* If we are running in the context of a replica, return ASAP:
+     * the replica key expiration is controlled by the primary that will
      * send us synthesized DEL operations for expired keys.
      *
      * Still we try to return the right information to the caller,
      * that is, 0 if we think the key should be still valid, 1 if
      * we think the key is expired at this time. */
-    if (server.masterhost != NULL) return now > when;
+    if (server.primaryhost != NULL) return now > when;
 
     /* Return when this key has not expired */
     if (now <= when) return 0;

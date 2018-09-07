@@ -97,7 +97,7 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
         set line [string trim $line]
         if {$line eq {}} continue
         set args [split $line " "]
-        lassign $args nodeid addr flags slaveof pingsent pongrecv configepoch linkstate
+        lassign $args nodeid addr flags replicaof pingsent pongrecv configepoch linkstate
         set slots [lrange $args 8 end]
         set addr [lindex [split $addr @] 0]
         if {$addr eq {:0}} {
@@ -116,7 +116,7 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
             host $host \
             port $port \
             flags $flags \
-            slaveof $slaveof \
+            replicaof $replicaof \
             slots $slots \
             link $link \
         ]

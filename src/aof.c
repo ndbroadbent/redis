@@ -637,9 +637,9 @@ struct client *createFakeClient(void) {
     c->bufpos = 0;
     c->flags = 0;
     c->btype = BLOCKED_NONE;
-    /* We set the fake client as a slave waiting for the synchronization
+    /* We set the fake client as a replica waiting for the synchronization
      * so that Redis will not try to send replies to this client. */
-    c->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
+    c->replstate = REPLICA_STATE_WAIT_BGSAVE_START;
     c->reply = listCreate();
     c->reply_bytes = 0;
     c->obuf_soft_limit_reached_time = 0;
@@ -1356,7 +1356,7 @@ int rewriteAppendOnlyFile(char *filename) {
         aofReadDiffFromParent();
     }
 
-    /* Ask the master to stop sending diffs. */
+    /* Ask the primary to stop sending diffs. */
     if (write(server.aof_pipe_write_ack_to_parent,"!",1) != 1) goto werr;
     if (anetNonBlock(NULL,server.aof_pipe_read_ack_from_parent) != ANET_OK)
         goto werr;

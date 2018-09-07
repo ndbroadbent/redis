@@ -102,9 +102,9 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CONFIG_DEFAULT_SLOWLOG_MAX_LEN 128
 #define CONFIG_DEFAULT_MAX_CLIENTS 10000
 #define CONFIG_AUTHPASS_MAX_LEN 512
-#define CONFIG_DEFAULT_SLAVE_PRIORITY 100
+#define CONFIG_DEFAULT_REPLICA_PRIORITY 100
 #define CONFIG_DEFAULT_REPL_TIMEOUT 60
-#define CONFIG_DEFAULT_REPL_PING_SLAVE_PERIOD 10
+#define CONFIG_DEFAULT_REPL_PING_REPLICA_PERIOD 10
 #define CONFIG_RUN_ID_SIZE 40
 #define RDB_EOF_MARK_SIZE 40
 #define CONFIG_DEFAULT_REPL_BACKLOG_SIZE (1024*1024)    /* 1mb */
@@ -129,11 +129,11 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CONFIG_DEFAULT_RDB_FILENAME "dump.rdb"
 #define CONFIG_DEFAULT_REPL_DISKLESS_SYNC 0
 #define CONFIG_DEFAULT_REPL_DISKLESS_SYNC_DELAY 5
-#define CONFIG_DEFAULT_SLAVE_SERVE_STALE_DATA 1
-#define CONFIG_DEFAULT_SLAVE_READ_ONLY 1
-#define CONFIG_DEFAULT_SLAVE_IGNORE_MAXMEMORY 1
-#define CONFIG_DEFAULT_SLAVE_ANNOUNCE_IP NULL
-#define CONFIG_DEFAULT_SLAVE_ANNOUNCE_PORT 0
+#define CONFIG_DEFAULT_REPLICA_SERVE_STALE_DATA 1
+#define CONFIG_DEFAULT_REPLICA_READ_ONLY 1
+#define CONFIG_DEFAULT_REPLICA_IGNORE_MAXMEMORY 1
+#define CONFIG_DEFAULT_REPLICA_ANNOUNCE_IP NULL
+#define CONFIG_DEFAULT_REPLICA_ANNOUNCE_PORT 0
 #define CONFIG_DEFAULT_REPL_DISABLE_TCP_NODELAY 0
 #define CONFIG_DEFAULT_MAXMEMORY 0
 #define CONFIG_DEFAULT_MAXMEMORY_SAMPLES 5
@@ -146,14 +146,14 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CONFIG_DEFAULT_ACTIVE_REHASHING 1
 #define CONFIG_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC 1
 #define CONFIG_DEFAULT_RDB_SAVE_INCREMENTAL_FSYNC 1
-#define CONFIG_DEFAULT_MIN_SLAVES_TO_WRITE 0
-#define CONFIG_DEFAULT_MIN_SLAVES_MAX_LAG 10
+#define CONFIG_DEFAULT_MIN_REPLICAS_TO_WRITE 0
+#define CONFIG_DEFAULT_MIN_REPLICAS_MAX_LAG 10
 #define NET_IP_STR_LEN 46 /* INET6_ADDRSTRLEN is 46, but we need to be sure */
 #define NET_PEER_ID_LEN (NET_IP_STR_LEN+32) /* Must be enough for ip:port */
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_LATENCY_MONITOR_THRESHOLD 0
-#define CONFIG_DEFAULT_SLAVE_LAZY_FLUSH 0
+#define CONFIG_DEFAULT_REPLICA_LAZY_FLUSH 0
 #define CONFIG_DEFAULT_LAZYFREE_LAZY_EVICTION 0
 #define CONFIG_DEFAULT_LAZYFREE_LAZY_EXPIRE 0
 #define CONFIG_DEFAULT_LAZYFREE_LAZY_SERVER_DEL 0
@@ -225,9 +225,9 @@ typedef long long mstime_t; /* millisecond time type. */
 #define AOF_WAIT_REWRITE 2    /* AOF waits rewrite to start appending */
 
 /* Client flags */
-#define CLIENT_SLAVE (1<<0)   /* This client is a slave server */
-#define CLIENT_MASTER (1<<1)  /* This client is a master server */
-#define CLIENT_MONITOR (1<<2) /* This client is a slave monitor, see MONITOR */
+#define CLIENT_REPLICA (1<<0)   /* This client is a replica server */
+#define CLIENT_PRIMARY (1<<1)  /* This client is a primary server */
+#define CLIENT_MONITOR (1<<2) /* This client is a replica monitor, see MONITOR */
 #define CLIENT_MULTI (1<<3)   /* This client is in a MULTI context */
 #define CLIENT_BLOCKED (1<<4) /* The client is waiting in a blocking operation */
 #define CLIENT_DIRTY_CAS (1<<5) /* Watched keys modified. EXEC will fail. */
@@ -239,14 +239,14 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CLIENT_CLOSE_ASAP (1<<10)/* Close this client ASAP */
 #define CLIENT_UNIX_SOCKET (1<<11) /* Client connected via Unix domain socket */
 #define CLIENT_DIRTY_EXEC (1<<12)  /* EXEC will fail for errors while queueing */
-#define CLIENT_MASTER_FORCE_REPLY (1<<13)  /* Queue replies even if is master */
+#define CLIENT_PRIMARY_FORCE_REPLY (1<<13)  /* Queue replies even if is primary */
 #define CLIENT_FORCE_AOF (1<<14)   /* Force AOF propagation of current cmd. */
 #define CLIENT_FORCE_REPL (1<<15)  /* Force replication of current cmd. */
 #define CLIENT_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. */
 #define CLIENT_READONLY (1<<17)    /* Cluster client is in read-only state. */
 #define CLIENT_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
 #define CLIENT_PREVENT_AOF_PROP (1<<19)  /* Don't propagate to AOF. */
-#define CLIENT_PREVENT_REPL_PROP (1<<20)  /* Don't propagate to slaves. */
+#define CLIENT_PREVENT_REPL_PROP (1<<20)  /* Don't propagate to replicas. */
 #define CLIENT_PREVENT_PROP (CLIENT_PREVENT_AOF_PROP|CLIENT_PREVENT_REPL_PROP)
 #define CLIENT_PENDING_WRITE (1<<21) /* Client has output to send but a write
                                         handler is yet not installed. */
@@ -274,21 +274,21 @@ typedef long long mstime_t; /* millisecond time type. */
 /* Client classes for client limits, currently used only for
  * the max-client-output-buffer limit implementation. */
 #define CLIENT_TYPE_NORMAL 0 /* Normal req-reply clients + MONITORs */
-#define CLIENT_TYPE_SLAVE 1  /* Slaves. */
+#define CLIENT_TYPE_REPLICA 1  /* Replicas. */
 #define CLIENT_TYPE_PUBSUB 2 /* Clients subscribed to PubSub channels. */
-#define CLIENT_TYPE_MASTER 3 /* Master. */
+#define CLIENT_TYPE_PRIMARY 3 /* Primary. */
 #define CLIENT_TYPE_OBUF_COUNT 3 /* Number of clients to expose to output
                                     buffer configuration. Just the first
-                                    three: normal, slave, pubsub. */
+                                    three: normal, replica, pubsub. */
 
-/* Slave replication state. Used in server.repl_state for slaves to remember
+/* Replica replication state. Used in server.repl_state for replicas to remember
  * what to do next. */
 #define REPL_STATE_NONE 0 /* No active replication */
-#define REPL_STATE_CONNECT 1 /* Must connect to master */
-#define REPL_STATE_CONNECTING 2 /* Connecting to master */
+#define REPL_STATE_CONNECT 1 /* Must connect to primary */
+#define REPL_STATE_CONNECTING 2 /* Connecting to primary */
 /* --- Handshake states, must be ordered --- */
 #define REPL_STATE_RECEIVE_PONG 3 /* Wait for PING reply */
-#define REPL_STATE_SEND_AUTH 4 /* Send AUTH to master */
+#define REPL_STATE_SEND_AUTH 4 /* Send AUTH to primary */
 #define REPL_STATE_RECEIVE_AUTH 5 /* Wait for AUTH reply */
 #define REPL_STATE_SEND_PORT 6 /* Send REPLCONF listening-port */
 #define REPL_STATE_RECEIVE_PORT 7 /* Wait for REPLCONF reply */
@@ -299,24 +299,24 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REPL_STATE_SEND_PSYNC 12 /* Send PSYNC */
 #define REPL_STATE_RECEIVE_PSYNC 13 /* Wait for PSYNC reply */
 /* --- End of handshake states --- */
-#define REPL_STATE_TRANSFER 14 /* Receiving .rdb from master */
-#define REPL_STATE_CONNECTED 15 /* Connected to master */
+#define REPL_STATE_TRANSFER 14 /* Receiving .rdb from primary */
+#define REPL_STATE_CONNECTED 15 /* Connected to primary */
 
-/* State of slaves from the POV of the master. Used in client->replstate.
- * In SEND_BULK and ONLINE state the slave receives new updates
+/* State of replicas from the POV of the primary. Used in client->replstate.
+ * In SEND_BULK and ONLINE state the replica receives new updates
  * in its output queue. In the WAIT_BGSAVE states instead the server is waiting
  * to start the next background saving in order to send updates to it. */
-#define SLAVE_STATE_WAIT_BGSAVE_START 6 /* We need to produce a new RDB file. */
-#define SLAVE_STATE_WAIT_BGSAVE_END 7 /* Waiting RDB file creation to finish. */
-#define SLAVE_STATE_SEND_BULK 8 /* Sending RDB file to slave. */
-#define SLAVE_STATE_ONLINE 9 /* RDB file transmitted, sending just updates. */
+#define REPLICA_STATE_WAIT_BGSAVE_START 6 /* We need to produce a new RDB file. */
+#define REPLICA_STATE_WAIT_BGSAVE_END 7 /* Waiting RDB file creation to finish. */
+#define REPLICA_STATE_SEND_BULK 8 /* Sending RDB file to replica. */
+#define REPLICA_STATE_ONLINE 9 /* RDB file transmitted, sending just updates. */
 
-/* Slave capabilities. */
-#define SLAVE_CAPA_NONE 0
-#define SLAVE_CAPA_EOF (1<<0)    /* Can parse the RDB EOF streaming format. */
-#define SLAVE_CAPA_PSYNC2 (1<<1) /* Supports PSYNC2 protocol. */
+/* Replica capabilities. */
+#define REPLICA_CAPA_NONE 0
+#define REPLICA_CAPA_EOF (1<<0)    /* Can parse the RDB EOF streaming format. */
+#define REPLICA_CAPA_PSYNC2 (1<<1) /* Supports PSYNC2 protocol. */
 
-/* Synchronous read timeout - slave side */
+/* Synchronous read timeout - replica side */
 #define CONFIG_REPL_SYNCIO_TIMEOUT 5
 
 /* List related stuff */
@@ -425,7 +425,7 @@ typedef long long mstime_t; /* millisecond time type. */
 /* RDB active child save type. */
 #define RDB_CHILD_TYPE_NONE 0
 #define RDB_CHILD_TYPE_DISK 1     /* RDB is written to disk. */
-#define RDB_CHILD_TYPE_SOCKET 2   /* RDB is written to slave socket. */
+#define RDB_CHILD_TYPE_SOCKET 2   /* RDB is written to replica socket. */
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -712,10 +712,10 @@ typedef struct client {
     robj *name;             /* As set by CLIENT SETNAME. */
     sds querybuf;           /* Buffer we use to accumulate client queries. */
     size_t qb_pos;          /* The position we have read in querybuf. */
-    sds pending_querybuf;   /* If this client is flagged as master, this buffer
+    sds pending_querybuf;   /* If this client is flagged as primary, this buffer
                                represents the yet not applied portion of the
                                replication stream that we are receiving from
-                               the master. */
+                               the primary. */
     size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size. */
     int argc;               /* Num of arguments of current command. */
     robj **argv;            /* Arguments of current command. */
@@ -732,23 +732,23 @@ typedef struct client {
     time_t obuf_soft_limit_reached_time;
     int flags;              /* Client flags: CLIENT_* macros. */
     int authenticated;      /* When requirepass is non-NULL. */
-    int replstate;          /* Replication state if this is a slave. */
-    int repl_put_online_on_ack; /* Install slave write handler on ACK. */
+    int replstate;          /* Replication state if this is a replica. */
+    int repl_put_online_on_ack; /* Install replica write handler on ACK. */
     int repldbfd;           /* Replication DB file descriptor. */
     off_t repldboff;        /* Replication DB file offset. */
     off_t repldbsize;       /* Replication DB file size. */
     sds replpreamble;       /* Replication DB preamble. */
-    long long read_reploff; /* Read replication offset if this is a master. */
-    long long reploff;      /* Applied replication offset if this is a master. */
-    long long repl_ack_off; /* Replication ack offset, if this is a slave. */
-    long long repl_ack_time;/* Replication ack time, if this is a slave. */
-    long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
-                                       copying this slave output buffer
+    long long read_reploff; /* Read replication offset if this is a primary. */
+    long long reploff;      /* Applied replication offset if this is a primary. */
+    long long repl_ack_off; /* Replication ack offset, if this is a replica. */
+    long long repl_ack_time;/* Replication ack time, if this is a replica. */
+    long long psync_initial_offset; /* FULLRESYNC reply offset other replicas
+                                       copying this replica output buffer
                                        should use. */
-    char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
-    int slave_listening_port; /* As configured with: SLAVECONF listening-port */
-    char slave_ip[NET_IP_STR_LEN]; /* Optionally given by REPLCONF ip-address */
-    int slave_capa;         /* Slave capabilities: SLAVE_CAPA_* bitwise OR. */
+    char replid[CONFIG_RUN_ID_SIZE+1]; /* Primary replication ID (if primary). */
+    int replica_listening_port; /* As configured with: REPLICACONF listening-port */
+    char replica_ip[NET_IP_STR_LEN]; /* Optionally given by REPLCONF ip-address */
+    int replica_capa;         /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
     multiState mstate;      /* MULTI/EXEC state */
     int btype;              /* Type of blocking op if CLIENT_BLOCKED. */
     blockingState bpop;     /* blocking state */
@@ -780,7 +780,7 @@ struct sharedObjectsStruct {
     *colon, *nullbulk, *nullmultibulk, *queued,
     *emptymultibulk, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr,
     *outofrangeerr, *noscripterr, *loadingerr, *slowscripterr, *bgsaveerr,
-    *masterdownerr, *roslaveerr, *execaborterr, *noautherr, *noreplicaserr,
+    *primarydownerr, *roreplicaerr, *execaborterr, *noautherr, *noreplicaserr,
     *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
     *rpop, *lpop, *lpush, *rpoplpush, *zpopmin, *zpopmax, *emptyscan,
@@ -852,7 +852,7 @@ struct redisMemOverhead {
     size_t total_allocated;
     size_t startup_allocated;
     size_t repl_backlog;
-    size_t clients_slaves;
+    size_t clients_replicas;
     size_t clients_normal;
     size_t aof_buffer;
     size_t lua_caches;
@@ -883,12 +883,12 @@ struct redisMemOverhead {
  * metadata to the RDB file.
  *
  * Currently the only use is to select a DB at load time, useful in
- * replication in order to make sure that chained slaves (slaves of slaves)
+ * replication in order to make sure that chained replicas (replicas of replicas)
  * select the correct DB and are able to accept the stream coming from the
- * top-level master. */
+ * top-level primary. */
 typedef struct rdbSaveInfo {
     /* Used saving and loading. */
-    int repl_stream_db;  /* DB to select in server.master client. */
+    int repl_stream_db;  /* DB to select in server.primary client. */
 
     /* Used only loading. */
     int repl_id_is_set;  /* True if repl_id field is set. */
@@ -970,7 +970,7 @@ struct redisServer {
     list *clients;              /* List of active clients */
     list *clients_to_close;     /* Clients to close asynchronously */
     list *clients_pending_write; /* There is to write or install handler. */
-    list *slaves, *monitors;    /* List of slaves and MONITORs */
+    list *replicas, *monitors;    /* List of replicas and MONITORs */
     client *current_client; /* Current client, only used on crash report */
     rax *clients_index;         /* Active clients dictionary by client ID. */
     int clients_paused;         /* True if clients are currently paused */
@@ -1009,7 +1009,7 @@ struct redisServer {
     long long stat_fork_time;       /* Time needed to perform latest fork() */
     double stat_fork_rate;          /* Fork rate in GB/sec. */
     long long stat_rejected_conn;   /* Clients rejected because of maxclients */
-    long long stat_sync_full;       /* Number of full resyncs with slaves. */
+    long long stat_sync_full;       /* Number of full resyncs with replicas. */
     long long stat_sync_partial_ok; /* Number of accepted PSYNC requests. */
     long long stat_sync_partial_err;/* Number of unaccepted PSYNC requests. */
     list *slowlog;                  /* SLOWLOG list of commands */
@@ -1102,7 +1102,7 @@ struct redisServer {
     int lastbgsave_status;          /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;  /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_write_result_to_parent; /* RDB pipes used to return the state */
-    int rdb_pipe_read_result_from_child; /* of each slave in diskless SYNC. */
+    int rdb_pipe_read_result_from_child; /* of each replica in diskless SYNC. */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2];         /* Pipe used to write the child_info_data. */
     struct {
@@ -1117,66 +1117,66 @@ struct redisServer {
     int syslog_enabled;             /* Is syslog enabled? */
     char *syslog_ident;             /* Syslog ident */
     int syslog_facility;            /* Syslog facility */
-    /* Replication (master) */
+    /* Replication (primary) */
     char replid[CONFIG_RUN_ID_SIZE+1];  /* My current replication ID. */
-    char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from master*/
-    long long master_repl_offset;   /* My current replication offset */
+    char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from primary*/
+    long long primary_repl_offset;   /* My current replication offset */
     long long second_replid_offset; /* Accept offsets up to this for replid2. */
-    int slaveseldb;                 /* Last SELECTed DB in replication output */
-    int repl_ping_slave_period;     /* Master pings the slave every N seconds */
+    int replicaseldb;                 /* Last SELECTed DB in replication output */
+    int repl_ping_replica_period;     /* Primary pings the replica every N seconds */
     char *repl_backlog;             /* Replication backlog for partial syncs */
     long long repl_backlog_size;    /* Backlog circular buffer size */
     long long repl_backlog_histlen; /* Backlog actual data length */
     long long repl_backlog_idx;     /* Backlog circular buffer current offset,
                                        that is the next byte will'll write to.*/
-    long long repl_backlog_off;     /* Replication "master offset" of first
+    long long repl_backlog_off;     /* Replication "primary offset" of first
                                        byte in the replication backlog buffer.*/
-    time_t repl_backlog_time_limit; /* Time without slaves after the backlog
+    time_t repl_backlog_time_limit; /* Time without replicas after the backlog
                                        gets released. */
-    time_t repl_no_slaves_since;    /* We have no slaves since that time.
-                                       Only valid if server.slaves len is 0. */
-    int repl_min_slaves_to_write;   /* Min number of slaves to write. */
-    int repl_min_slaves_max_lag;    /* Max lag of <count> slaves to write. */
-    int repl_good_slaves_count;     /* Number of slaves with lag <= max_lag. */
-    int repl_diskless_sync;         /* Send RDB to slaves sockets directly. */
+    time_t repl_no_replicas_since;    /* We have no replicas since that time.
+                                       Only valid if server.replicas len is 0. */
+    int repl_min_replicas_to_write;   /* Min number of replicas to write. */
+    int repl_min_replicas_max_lag;    /* Max lag of <count> replicas to write. */
+    int repl_good_replicas_count;     /* Number of replicas with lag <= max_lag. */
+    int repl_diskless_sync;         /* Send RDB to replicas sockets directly. */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
-    /* Replication (slave) */
-    char *masterauth;               /* AUTH with this password with master */
-    char *masterhost;               /* Hostname of master */
-    int masterport;                 /* Port of master */
-    int repl_timeout;               /* Timeout after N seconds of master idle */
-    client *master;     /* Client that is master for this slave */
-    client *cached_master; /* Cached master to be reused for PSYNC. */
+    /* Replication (replica) */
+    char *primaryauth;               /* AUTH with this password with primary */
+    char *primaryhost;               /* Hostname of primary */
+    int primaryport;                 /* Port of primary */
+    int repl_timeout;               /* Timeout after N seconds of primary idle */
+    client *primary;     /* Client that is primary for this replica */
+    client *cached_primary; /* Cached primary to be reused for PSYNC. */
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
-    int repl_state;          /* Replication status if the instance is a slave */
-    off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
-    off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
+    int repl_state;          /* Replication status if the instance is a replica */
+    off_t repl_transfer_size; /* Size of RDB to read from primary during sync. */
+    off_t repl_transfer_read; /* Amount of RDB read from primary during sync. */
     off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
-    int repl_transfer_s;     /* Slave -> Master SYNC socket */
-    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
-    char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
+    int repl_transfer_s;     /* Replica -> Primary SYNC socket */
+    int repl_transfer_fd;    /* Replica -> Primary SYNC temp file descriptor */
+    char *repl_transfer_tmpfile; /* Replica-> primary SYNC temp file name */
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
-    int repl_slave_ro;          /* Slave is read only? */
-    int repl_slave_ignore_maxmemory;    /* If true slaves do not evict. */
-    time_t repl_down_since; /* Unix time at which link with master went down */
+    int repl_replica_ro;          /* Replica is read only? */
+    int repl_replica_ignore_maxmemory;    /* If true replicas do not evict. */
+    time_t repl_down_since; /* Unix time at which link with primary went down */
     int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */
-    int slave_priority;             /* Reported in INFO and used by Sentinel. */
-    int slave_announce_port;        /* Give the master this listening port. */
-    char *slave_announce_ip;        /* Give the master this ip address. */
-    /* The following two fields is where we store master PSYNC replid/offset
+    int replica_priority;             /* Reported in INFO and used by Sentinel. */
+    int replica_announce_port;        /* Give the primary this listening port. */
+    char *replica_announce_ip;        /* Give the primary this ip address. */
+    /* The following two fields is where we store primary PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
-     * the server->master client structure. */
-    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
-    long long master_initial_offset;           /* Master PSYNC offset. */
-    int repl_slave_lazy_flush;          /* Lazy FLUSHALL before loading DB? */
+     * the server->primary client structure. */
+    char primary_replid[CONFIG_RUN_ID_SIZE+1];  /* Primary PSYNC runid. */
+    long long primary_initial_offset;           /* Primary PSYNC offset. */
+    int repl_replica_lazy_flush;          /* Lazy FLUSHALL before loading DB? */
     /* Replication script cache. */
-    dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */
+    dict *repl_scriptcache_dict;        /* SHA1 all replicas are aware of. */
     list *repl_scriptcache_fifo;        /* First in, first out LRU eviction. */
     unsigned int repl_scriptcache_size; /* Max number of elements. */
     /* Synchronous replication. */
     list *clients_waiting_acks;         /* Clients waiting in WAIT command. */
-    int get_ack_from_slaves;            /* If true we send REPLCONF GETACK. */
+    int get_ack_from_replicas;            /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;            /* Max number of simultaneous clients */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
@@ -1224,11 +1224,11 @@ struct redisServer {
     char *cluster_configfile; /* Cluster auto-generated config file name. */
     struct clusterState *cluster;  /* State of the cluster */
     int cluster_migration_barrier; /* Cluster replicas migration barrier. */
-    int cluster_slave_validity_factor; /* Slave max data age for failover. */
+    int cluster_replica_validity_factor; /* Replica max data age for failover. */
     int cluster_require_full_coverage; /* If true, put the cluster down if
                                           there is at least an uncovered slot.*/
-    int cluster_slave_no_failover;  /* Prevent slave from starting a failover
-                                       if the master is in failure state. */
+    int cluster_replica_no_failover;  /* Prevent replica from starting a failover
+                                       if the primary is in failure state. */
     char *cluster_announce_ip;  /* IP address to announce on cluster bus. */
     int cluster_announce_port;     /* base port to announce on cluster bus. */
     int cluster_announce_bus_port; /* bus port to announce on cluster bus. */
@@ -1458,8 +1458,8 @@ void asyncCloseClientOnOutputBufferLimitReached(client *c);
 int getClientType(client *c);
 int getClientTypeByName(char *name);
 char *getClientTypeName(int class);
-void flushSlavesOutputBuffers(void);
-void disconnectSlaves(void);
+void flushReplicasOutputBuffers(void);
+void disconnectReplicas(void);
 int listenToPort(int port, int *fds, int *count);
 void pauseClients(mstime_t duration);
 int clientsArePaused(void);
@@ -1561,17 +1561,17 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout);
 ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
 /* Replication */
-void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
-void replicationFeedSlavesFromMasterStream(list *slaves, char *buf, size_t buflen);
+void replicationFeedReplicas(list *replicas, int dictid, robj **argv, int argc);
+void replicationFeedReplicasFromPrimaryStream(list *replicas, char *buf, size_t buflen);
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc);
-void updateSlavesWaitingBgsave(int bgsaveerr, int type);
+void updateReplicasWaitingBgsave(int bgsaveerr, int type);
 void replicationCron(void);
-void replicationHandleMasterDisconnection(void);
-void replicationCacheMaster(client *c);
+void replicationHandlePrimaryDisconnection(void);
+void replicationCachePrimary(client *c);
 void resizeReplicationBacklog(long long newsize);
-void replicationSetMaster(char *ip, int port);
-void replicationUnsetMaster(void);
-void refreshGoodSlavesCount(void);
+void replicationSetPrimary(char *ip, int port);
+void replicationUnsetPrimary(void);
+void refreshGoodReplicasCount(void);
 void replicationScriptCacheInit(void);
 void replicationScriptCacheFlush(void);
 void replicationScriptCacheAdd(sds sha1);
@@ -1579,15 +1579,15 @@ int replicationScriptCacheExists(sds sha1);
 void processClientsWaitingReplicas(void);
 void unblockClientWaitingReplicas(client *c);
 int replicationCountAcksByOffset(long long offset);
-void replicationSendNewlineToMaster(void);
-long long replicationGetSlaveOffset(void);
-char *replicationGetSlaveName(client *c);
+void replicationSendNewlineToPrimary(void);
+long long replicationGetReplicaOffset(void);
+char *replicationGetReplicaName(client *c);
 long long getPsyncInitialOffset(void);
-int replicationSetupSlaveForFullResync(client *slave, long long offset);
+int replicationSetupReplicaForFullResync(client *replica, long long offset);
 void changeReplicationId(void);
 void clearReplicationId2(void);
 void chopReplicationBacklog(void);
-void replicationCacheMasterUsingMyself(void);
+void replicationCachePrimaryUsingMyself(void);
 void feedReplicationBacklog(void *ptr, size_t len);
 
 /* Generic persistence functions */
@@ -1894,10 +1894,10 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
 
 /* expire.c -- Handling of expired keys */
 void activeExpireCycle(int type);
-void expireSlaveKeys(void);
-void rememberSlaveKeyWithExpire(redisDb *db, robj *key);
-void flushSlaveKeysWithExpireList(void);
-size_t getSlaveKeyWithExpireCount(void);
+void expireReplicaKeys(void);
+void rememberReplicaKeyWithExpire(redisDb *db, robj *key);
+void flushReplicaKeysWithExpireList(void);
+size_t getReplicaKeyWithExpireCount(void);
 
 /* evict.c -- maxmemory handling and LRU eviction. */
 void evictionPoolAlloc(void);
@@ -1998,7 +1998,7 @@ void ttlCommand(client *c);
 void touchCommand(client *c);
 void pttlCommand(client *c);
 void persistCommand(client *c);
-void slaveofCommand(client *c);
+void replicaofCommand(client *c);
 void roleCommand(client *c);
 void debugCommand(client *c);
 void msetCommand(client *c);

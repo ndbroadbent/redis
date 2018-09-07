@@ -1,47 +1,47 @@
 start_server {tags {"repl"}} {
     start_server {} {
-        test {First server should have role slave after SLAVEOF} {
-            r -1 slaveof [srv 0 host] [srv 0 port]
+        test {First server should have role replica after REPLICAOF} {
+            r -1 replicaof [srv 0 host] [srv 0 port]
             wait_for_condition 50 100 {
-                [s -1 master_link_status] eq {up}
+                [s -1 primary_link_status] eq {up}
             } else {
                 fail "Replication not started."
             }
         }
 
-        test {If min-slaves-to-write is honored, write is accepted} {
-            r config set min-slaves-to-write 1
-            r config set min-slaves-max-lag 10
+        test {If min-replicas-to-write is honored, write is accepted} {
+            r config set min-replicas-to-write 1
+            r config set min-replicas-max-lag 10
             r set foo 12345
             wait_for_condition 50 100 {
                 [r -1 get foo] eq {12345}
             } else {
-                fail "Write did not reached slave"
+                fail "Write did not reached replica"
             }
         }
 
-        test {No write if min-slaves-to-write is < attached slaves} {
-            r config set min-slaves-to-write 2
-            r config set min-slaves-max-lag 10
+        test {No write if min-replicas-to-write is < attached replicas} {
+            r config set min-replicas-to-write 2
+            r config set min-replicas-max-lag 10
             catch {r set foo 12345} err
             set err
         } {NOREPLICAS*}
 
-        test {If min-slaves-to-write is honored, write is accepted (again)} {
-            r config set min-slaves-to-write 1
-            r config set min-slaves-max-lag 10
+        test {If min-replicas-to-write is honored, write is accepted (again)} {
+            r config set min-replicas-to-write 1
+            r config set min-replicas-max-lag 10
             r set foo 12345
             wait_for_condition 50 100 {
                 [r -1 get foo] eq {12345}
             } else {
-                fail "Write did not reached slave"
+                fail "Write did not reached replica"
             }
         }
 
-        test {No write if min-slaves-max-lag is > of the slave lag} {
+        test {No write if min-replicas-max-lag is > of the replica lag} {
             r -1 deferred 1
-            r config set min-slaves-to-write 1
-            r config set min-slaves-max-lag 2
+            r config set min-replicas-to-write 1
+            r config set min-replicas-max-lag 2
             r -1 debug sleep 6
             assert {[r set foo 12345] eq {OK}}
             after 4000
@@ -51,25 +51,25 @@ start_server {tags {"repl"}} {
             set err
         } {NOREPLICAS*}
 
-        test {min-slaves-to-write is ignored by slaves} {
-            r config set min-slaves-to-write 1
-            r config set min-slaves-max-lag 10
-            r -1 config set min-slaves-to-write 1
-            r -1 config set min-slaves-max-lag 10
+        test {min-replicas-to-write is ignored by replicas} {
+            r config set min-replicas-to-write 1
+            r config set min-replicas-max-lag 10
+            r -1 config set min-replicas-to-write 1
+            r -1 config set min-replicas-max-lag 10
             r set foo aaabbb
             wait_for_condition 50 100 {
                 [r -1 get foo] eq {aaabbb}
             } else {
-                fail "Write did not reached slave"
+                fail "Write did not reached replica"
             }
         }
 
         # Fix parameters for the next test to work
-        r config set min-slaves-to-write 0
-        r -1 config set min-slaves-to-write 0
+        r config set min-replicas-to-write 0
+        r -1 config set min-replicas-to-write 0
         r flushall
 
-        test {MASTER and SLAVE dataset should be identical after complex ops} {
+        test {PRIMARY and REPLICA dataset should be identical after complex ops} {
             createComplexDataset r 10000
             after 500
             if {[r debug digest] ne [r -1 debug digest]} {
@@ -81,7 +81,7 @@ start_server {tags {"repl"}} {
                 set fd [open /tmp/repldump2.txt w]
                 puts -nonewline $fd $csv2
                 close $fd
-                puts "Master - Slave inconsistency"
+                puts "Primary - Replica inconsistency"
                 puts "Run diff -u against /tmp/repldump*.txt for more info"
             }
             assert_equal [r debug digest] [r -1 debug digest]

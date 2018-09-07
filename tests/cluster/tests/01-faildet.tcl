@@ -10,7 +10,7 @@ test "Cluster should start ok" {
     assert_cluster_state ok
 }
 
-test "Killing two slave nodes" {
+test "Killing two replica nodes" {
     kill_instance redis 5
     kill_instance redis 6
 }
@@ -19,17 +19,17 @@ test "Cluster should be still up" {
     assert_cluster_state ok
 }
 
-test "Killing one master node" {
+test "Killing one primary node" {
     kill_instance redis 0
 }
 
-# Note: the only slave of instance 0 is already down so no
+# Note: the only replica of instance 0 is already down so no
 # failover is possible, that would change the state back to ok.
 test "Cluster should be down now" {
     assert_cluster_state fail
 }
 
-test "Restarting master node" {
+test "Restarting primary node" {
     restart_instance redis 0
 }
 

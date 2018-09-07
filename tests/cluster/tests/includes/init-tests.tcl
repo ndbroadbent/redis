@@ -32,13 +32,13 @@ test "Cluster nodes hard reset" {
         } else {
             set node_timeout 3000
         }
-        catch {R $id flushall} ; # May fail for readonly slaves.
+        catch {R $id flushall} ; # May fail for readonly replicas.
         R $id MULTI
         R $id cluster reset hard
         R $id cluster set-config-epoch [expr {$id+1}]
         R $id EXEC
         R $id config set cluster-node-timeout $node_timeout
-        R $id config set cluster-slave-validity-factor 10
+        R $id config set cluster-replica-validity-factor 10
         R $id config rewrite
     }
 }

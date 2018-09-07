@@ -199,8 +199,8 @@ void replyToBlockedClientTimedOut(client *c) {
 
 /* Mass-unblock clients because something changed in the instance that makes
  * blocking no longer safe. For example clients blocked in list operations
- * in an instance which turns from master to slave is unsafe, so this function
- * is called when a master turns into a slave.
+ * in an instance which turns from primary to replica is unsafe, so this function
+ * is called when a primary turns into a replica.
  *
  * The semantics is to send an -UNBLOCKED error to the client, disconnecting
  * it at the same time. */
@@ -215,7 +215,7 @@ void disconnectAllBlockedClients(void) {
         if (c->flags & CLIENT_BLOCKED) {
             addReplySds(c,sdsnew(
                 "-UNBLOCKED force unblock from blocking operation, "
-                "instance state changed (master -> slave?)\r\n"));
+                "instance state changed (primary -> replica?)\r\n"));
             unblockClient(c);
             c->flags |= CLIENT_CLOSE_AFTER_REPLY;
         }

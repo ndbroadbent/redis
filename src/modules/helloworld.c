@@ -267,7 +267,7 @@ int HelloRepl1_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
 
 /* Another command to show replication. In this case, we call
  * RedisModule_ReplicateVerbatim() to mean we want just the command to be
- * propagated to slaves / AOF exactly as it was called by the user.
+ * propagated to replicas / AOF exactly as it was called by the user.
  *
  * This command also shows how to work with string objects.
  * It takes a list, and increments all the elements (that must have

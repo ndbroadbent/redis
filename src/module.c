@@ -613,7 +613,7 @@ int commandFlagsFromString(char *s) {
  * * **"pubsub"**:    The command publishes things on Pub/Sub channels.
  * * **"random"**:    The command may have different outputs even starting
  *                    from the same input arguments and key values.
- * * **"allow-stale"**: The command is allowed to run on slaves that don't
+ * * **"allow-stale"**: The command is allowed to run on replicas that don't
  *                      serve stale data. Don't use if you don't know what
  *                      this means.
  * * **"no-monitor"**: Don't propagate the command on monitor. Use this if
@@ -1221,7 +1221,7 @@ void moduleReplicateMultiIfNeeded(RedisModuleCtx *ctx) {
     ctx->flags |= REDISMODULE_CTX_MULTI_EMITTED;
 }
 
-/* Replicate the specified command and arguments to slaves and AOF, as effect
+/* Replicate the specified command and arguments to replicas and AOF, as effect
  * of execution of the calling command implementation.
  *
  * The replicated commands are always wrapped into the MULTI/EXEC that
@@ -1273,7 +1273,7 @@ int RM_Replicate(RedisModuleCtx *ctx, const char *cmdname, const char *fmt, ...)
  * commands.
  *
  * Basically this form of replication is useful when you want to propagate
- * the command to the slaves and AOF file exactly as it was called, since
+ * the command to the replicas and AOF file exactly as it was called, since
  * the command can just be re-executed to deterministically re-create the
  * new state starting from the old one.
  *
@@ -1322,9 +1322,9 @@ int RM_GetSelectedDb(RedisModuleCtx *ctx) {
  *
  *  * REDISMODULE_CTX_FLAGS_MULTI: The command is running inside a transaction
  *
- *  * REDISMODULE_CTX_FLAGS_MASTER: The Redis instance is a master
+ *  * REDISMODULE_CTX_FLAGS_PRIMARY: The Redis instance is a primary
  *
- *  * REDISMODULE_CTX_FLAGS_SLAVE: The Redis instance is a slave
+ *  * REDISMODULE_CTX_FLAGS_REPLICA: The Redis instance is a replica
  *
  *  * REDISMODULE_CTX_FLAGS_READONLY: The Redis instance is read-only
  *
@@ -1374,11 +1374,11 @@ int RM_GetContextFlags(RedisModuleCtx *ctx) {
         flags |= REDISMODULE_CTX_FLAGS_RDB;
 
     /* Replication flags */
-    if (server.masterhost == NULL) {
-        flags |= REDISMODULE_CTX_FLAGS_MASTER;
+    if (server.primaryhost == NULL) {
+        flags |= REDISMODULE_CTX_FLAGS_PRIMARY;
     } else {
-        flags |= REDISMODULE_CTX_FLAGS_SLAVE;
-        if (server.repl_slave_ro)
+        flags |= REDISMODULE_CTX_FLAGS_REPLICA;
+        if (server.repl_replica_ro)
             flags |= REDISMODULE_CTX_FLAGS_READONLY;
     }
 
@@ -2680,8 +2680,8 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
 
     /* If this is a Redis Cluster node, we need to make sure the module is not
      * trying to access non-local keys, with the exception of commands
-     * received from our master. */
-    if (server.cluster_enabled && !(ctx->client->flags & CLIENT_MASTER)) {
+     * received from our primary. */
+    if (server.cluster_enabled && !(ctx->client->flags & CLIENT_PRIMARY)) {
         /* Duplicate relevant flags in the module client. */
         c->flags &= ~(CLIENT_READONLY|CLIENT_ASKING);
         c->flags |= ctx->client->flags & (CLIENT_READONLY|CLIENT_ASKING);
@@ -2695,7 +2695,7 @@ RedisModuleCallReply *RM_Call(RedisModuleCtx *ctx, const char *cmdname, const ch
 
     /* If we are using single commands replication, we need to wrap what
      * we propagate into a MULTI/EXEC block, so that it will be atomic like
-     * a Lua script in the context of AOF and slaves. */
+     * a Lua script in the context of AOF and replicas. */
     if (replicate) moduleReplicateMultiIfNeeded(ctx);
 
     /* Run the command */
@@ -3922,7 +3922,7 @@ typedef struct moduleClusterNodeInfo {
     int flags;
     char ip[NET_IP_STR_LEN];
     int port;
-    char master_id[40]; /* Only if flags & REDISMODULE_NODE_MASTER is true. */
+    char primary_id[40]; /* Only if flags & REDISMODULE_NODE_PRIMARY is true. */
 } mdouleClusterNodeInfo;
 
 /* We have an array of message types: each bucket is a linked list of
@@ -4074,25 +4074,25 @@ size_t RM_GetClusterSize(void) {
  * then returns REDISMODULE_OK. Otherwise if the node ID does not exist from
  * the POV of this local node, REDISMODULE_ERR is returned.
  *
- * The arguments ip, master_id, port and flags can be NULL in case we don't
- * need to populate back certain info. If an ip and master_id (only populated
- * if the instance is a slave) are specified, they point to buffers holding
+ * The arguments ip, primary_id, port and flags can be NULL in case we don't
+ * need to populate back certain info. If an ip and primary_id (only populated
+ * if the instance is a replica) are specified, they point to buffers holding
  * at least REDISMODULE_NODE_ID_LEN bytes. The strings written back as ip
- * and master_id are not null terminated.
+ * and primary_id are not null terminated.
  *
  * The list of flags reported is the following:
  *
  * * REDISMODULE_NODE_MYSELF        This node
- * * REDISMODULE_NODE_MASTER        The node is a master
- * * REDISMODULE_NODE_SLAVE         The ndoe is a slave
+ * * REDISMODULE_NODE_PRIMARY        The node is a primary
+ * * REDISMODULE_NODE_REPLICA         The ndoe is a replica
  * * REDISMODULE_NODE_PFAIL         We see the node as failing
  * * REDISMODULE_NODE_FAIL          The cluster agrees the node is failing
- * * REDISMODULE_NODE_NOFAILOVER    The slave is configured to never failover
+ * * REDISMODULE_NODE_NOFAILOVER    The replica is configured to never failover
  */
 
 clusterNode *clusterLookupNode(const char *name); /* We need access to internals */
 
-int RM_GetClusterNodeInfo(RedisModuleCtx *ctx, const char *id, char *ip, char *master_id, int *port, int *flags) {
+int RM_GetClusterNodeInfo(RedisModuleCtx *ctx, const char *id, char *ip, char *primary_id, int *port, int *flags) {
     UNUSED(ctx);
 
     clusterNode *node = clusterLookupNode(id);
@@ -4101,14 +4101,14 @@ int RM_GetClusterNodeInfo(RedisModuleCtx *ctx, const char *id, char *ip, char *m
 
     if (ip) memcpy(ip,node->name,REDISMODULE_NODE_ID_LEN);
 
-    if (master_id) {
+    if (primary_id) {
         /* If the information is not available, the function will set the
          * field to zero bytes, so that when the field can't be populated the
          * function kinda remains predictable. */
-        if (node->flags & CLUSTER_NODE_MASTER && node->slaveof)
-            memcpy(master_id,node->slaveof->name,REDISMODULE_NODE_ID_LEN);
+        if (node->flags & CLUSTER_NODE_PRIMARY && node->replicaof)
+            memcpy(primary_id,node->replicaof->name,REDISMODULE_NODE_ID_LEN);
         else
-            memset(master_id,0,REDISMODULE_NODE_ID_LEN);
+            memset(primary_id,0,REDISMODULE_NODE_ID_LEN);
     }
     if (port) *port = node->port;
 
@@ -4117,8 +4117,8 @@ int RM_GetClusterNodeInfo(RedisModuleCtx *ctx, const char *id, char *ip, char *m
     if (flags) {
         *flags = 0;
         if (node->flags & CLUSTER_NODE_MYSELF) *flags |= REDISMODULE_NODE_MYSELF;
-        if (node->flags & CLUSTER_NODE_MASTER) *flags |= REDISMODULE_NODE_MASTER;
-        if (node->flags & CLUSTER_NODE_SLAVE) *flags |= REDISMODULE_NODE_SLAVE;
+        if (node->flags & CLUSTER_NODE_PRIMARY) *flags |= REDISMODULE_NODE_PRIMARY;
+        if (node->flags & CLUSTER_NODE_REPLICA) *flags |= REDISMODULE_NODE_REPLICA;
         if (node->flags & CLUSTER_NODE_PFAIL) *flags |= REDISMODULE_NODE_PFAIL;
         if (node->flags & CLUSTER_NODE_FAIL) *flags |= REDISMODULE_NODE_FAIL;
         if (node->flags & CLUSTER_NODE_NOFAILOVER) *flags |= REDISMODULE_NODE_NOFAILOVER;
@@ -4367,7 +4367,7 @@ void moduleInitModulesSystem(void) {
  * The function aborts the server on errors, since to start with missing
  * modules is not considered sane: clients may rely on the existence of
  * given commands, loading AOF also may need some modules to exist, and
- * if this instance is a slave, it must understand commands from master. */
+ * if this instance is a replica, it must understand commands from primary. */
 void moduleLoadFromQueue(void) {
     listIter li;
     listNode *ln;

@@ -202,8 +202,8 @@ proc pause_on_error {} {
                     set str {}
                     append str "@[RI $id tcp_port]: "
                     append str "[RI $id role] "
-                    if {[RI $id role] eq {slave}} {
-                        append str "[RI $id master_host]:[RI $id master_port]"
+                    if {[RI $id role] eq {replica}} {
+                        append str "[RI $id primary_host]:[RI $id primary_port]"
                     }
                     set str
                 } retval]
@@ -218,7 +218,7 @@ proc pause_on_error {} {
                 set errcode [catch {
                     set str {}
                     append str "@[SI $id tcp_port]: "
-                    append str "[join [S $id sentinel get-master-addr-by-name mymaster]]"
+                    append str "[join [S $id sentinel get-primary-addr-by-name myprimary]]"
                     set str
                 } retval]
                 if {$errcode} {
@@ -399,28 +399,28 @@ proc set_instance_attrib {type id attrib newval} {
     lset ::${type}_instances $id $d
 }
 
-# Create a master-slave cluster of the given number of total instances.
-# The first instance "0" is the master, all others are configured as
-# slaves.
-proc create_redis_master_slave_cluster n {
+# Create a primary-replica cluster of the given number of total instances.
+# The first instance "0" is the primary, all others are configured as
+# replicas.
+proc create_redis_primary_replica_cluster n {
     foreach_redis_id id {
         if {$id == 0} {
-            # Our master.
-            R $id slaveof no one
+            # Our primary.
+            R $id replicaof no one
             R $id flushall
         } elseif {$id < $n} {
-            R $id slaveof [get_instance_attrib redis 0 host] \
+            R $id replicaof [get_instance_attrib redis 0 host] \
                           [get_instance_attrib redis 0 port]
         } else {
             # Instances not part of the cluster.
-            R $id slaveof no one
+            R $id replicaof no one
         }
     }
-    # Wait for all the slaves to sync.
+    # Wait for all the replicas to sync.
     wait_for_condition 1000 50 {
-        [RI 0 connected_slaves] == ($n-1)
+        [RI 0 connected_replicas] == ($n-1)
     } else {
-        fail "Unable to create a master-slaves cluster."
+        fail "Unable to create a primary-replicas cluster."
     }
 }
 

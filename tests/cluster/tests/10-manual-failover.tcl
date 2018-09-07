@@ -14,15 +14,15 @@ test "Cluster is writable" {
     cluster_write_test 0
 }
 
-test "Instance #5 is a slave" {
-    assert {[RI 5 role] eq {slave}}
+test "Instance #5 is a replica" {
+    assert {[RI 5 role] eq {replica}}
 }
 
-test "Instance #5 synced with the master" {
+test "Instance #5 synced with the primary" {
     wait_for_condition 1000 50 {
-        [RI 5 master_link_status] eq {up}
+        [RI 5 primary_link_status] eq {up}
     } else {
-        fail "Instance #5 master link status is not up"
+        fail "Instance #5 primary link status is not up"
     }
 }
 
@@ -75,8 +75,8 @@ test "Cluster is writable" {
     cluster_write_test 1
 }
 
-test "Instance #5 is now a master" {
-    assert {[RI 5 role] eq {master}}
+test "Instance #5 is now a primary" {
+    assert {[RI 5 role] eq {primary}}
 }
 
 test "Verify $numkeys keys for consistency with logical content" {
@@ -86,15 +86,15 @@ test "Verify $numkeys keys for consistency with logical content" {
     }
 }
 
-test "Instance #0 gets converted into a slave" {
+test "Instance #0 gets converted into a replica" {
     wait_for_condition 1000 50 {
-        [RI 0 role] eq {slave}
+        [RI 0 role] eq {replica}
     } else {
-        fail "Old master was not converted into slave"
+        fail "Old primary was not converted into replica"
     }
 }
 
-## Check that manual failover does not happen if we can't talk with the master.
+## Check that manual failover does not happen if we can't talk with the primary.
 
 source "../tests/includes/init-tests.tcl"
 
@@ -110,15 +110,15 @@ test "Cluster is writable" {
     cluster_write_test 0
 }
 
-test "Instance #5 is a slave" {
-    assert {[RI 5 role] eq {slave}}
+test "Instance #5 is a replica" {
+    assert {[RI 5 role] eq {replica}}
 }
 
-test "Instance #5 synced with the master" {
+test "Instance #5 synced with the primary" {
     wait_for_condition 1000 50 {
-        [RI 5 master_link_status] eq {up}
+        [RI 5 primary_link_status] eq {up}
     } else {
-        fail "Instance #5 master link status is not up"
+        fail "Instance #5 primary link status is not up"
     }
 }
 
@@ -131,9 +131,9 @@ test "Send CLUSTER FAILOVER to instance #5" {
     R 5 cluster failover
 }
 
-test "Instance #5 is still a slave after some time (no failover)" {
+test "Instance #5 is still a replica after some time (no failover)" {
     after 5000
-    assert {[RI 5 role] eq {master}}
+    assert {[RI 5 role] eq {primary}}
 }
 
 test "Wait for instance #0 to return back alive" {
@@ -157,15 +157,15 @@ test "Cluster is writable" {
     cluster_write_test 0
 }
 
-test "Instance #5 is a slave" {
-    assert {[RI 5 role] eq {slave}}
+test "Instance #5 is a replica" {
+    assert {[RI 5 role] eq {replica}}
 }
 
-test "Instance #5 synced with the master" {
+test "Instance #5 synced with the primary" {
     wait_for_condition 1000 50 {
-        [RI 5 master_link_status] eq {up}
+        [RI 5 primary_link_status] eq {up}
     } else {
-        fail "Instance #5 master link status is not up"
+        fail "Instance #5 primary link status is not up"
     }
 }
 
@@ -178,11 +178,11 @@ test "Send CLUSTER FAILOVER to instance #5" {
     R 5 cluster failover force
 }
 
-test "Instance #5 is a master after some time" {
+test "Instance #5 is a primary after some time" {
     wait_for_condition 1000 50 {
-        [RI 5 role] eq {master}
+        [RI 5 role] eq {primary}
     } else {
-        fail "Instance #5 is not a master after some time regardless of FORCE"
+        fail "Instance #5 is not a primary after some time regardless of FORCE"
     }
 }
 

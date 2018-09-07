@@ -130,9 +130,9 @@ client *createClient(int fd) {
     c->read_reploff = 0;
     c->repl_ack_off = 0;
     c->repl_ack_time = 0;
-    c->slave_listening_port = 0;
-    c->slave_ip[0] = '\0';
-    c->slave_capa = SLAVE_CAPA_NONE;
+    c->replica_listening_port = 0;
+    c->replica_ip[0] = '\0';
+    c->replica_capa = REPLICA_CAPA_NONE;
     c->reply = listCreate();
     c->reply_bytes = 0;
     c->obuf_soft_limit_reached_time = 0;
@@ -168,7 +168,7 @@ client *createClient(int fd) {
  * loop so that when the socket is writable new data gets written.
  *
  * If the client should not receive new data, because it is a fake client
- * (used to load AOF in memory), a master or because the setup of the write
+ * (used to load AOF in memory), a primary or because the setup of the write
  * handler failed, the function returns C_ERR.
  *
  * The function may return C_OK without actually installing the write
@@ -176,7 +176,7 @@ client *createClient(int fd) {
  *
  * 1) The event handler should already be installed since the output buffer
  *    already contains something.
- * 2) The client is a slave but not yet online, so we want to just accumulate
+ * 2) The client is a replica but not yet online, so we want to just accumulate
  *    writes in the buffer but not actually sending them yet.
  *
  * Typically gets called every time a reply is built, before adding more
@@ -190,21 +190,21 @@ int prepareClientToWrite(client *c) {
     /* CLIENT REPLY OFF / SKIP handling: don't send replies. */
     if (c->flags & (CLIENT_REPLY_OFF|CLIENT_REPLY_SKIP)) return C_ERR;
 
-    /* Masters don't receive replies, unless CLIENT_MASTER_FORCE_REPLY flag
+    /* Primaries don't receive replies, unless CLIENT_PRIMARY_FORCE_REPLY flag
      * is set. */
-    if ((c->flags & CLIENT_MASTER) &&
-        !(c->flags & CLIENT_MASTER_FORCE_REPLY)) return C_ERR;
+    if ((c->flags & CLIENT_PRIMARY) &&
+        !(c->flags & CLIENT_PRIMARY_FORCE_REPLY)) return C_ERR;
 
     if (c->fd <= 0) return C_ERR; /* Fake client for AOF loading. */
 
     /* Schedule the client to write the output buffers to the socket only
      * if not already done (there were no pending writes already and the client
-     * was yet not flagged), and, for slaves, if the slave can actually
+     * was yet not flagged), and, for replicas, if the replica can actually
      * receive writes at this stage. */
     if (!clientHasPendingReplies(c) &&
         !(c->flags & CLIENT_PENDING_WRITE) &&
         (c->replstate == REPL_STATE_NONE ||
-         (c->replstate == SLAVE_STATE_ONLINE && !c->repl_put_online_on_ack)))
+         (c->replstate == REPLICA_STATE_ONLINE && !c->repl_put_online_on_ack)))
     {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
@@ -344,28 +344,28 @@ void addReplyErrorLength(client *c, const char *s, size_t len) {
     addReplyString(c,s,len);
     addReplyString(c,"\r\n",2);
 
-    /* Sometimes it could be normal that a slave replies to a master with
+    /* Sometimes it could be normal that a replica replies to a primary with
      * an error and this function gets called. Actually the error will never
-     * be sent because addReply*() against master clients has no effect...
+     * be sent because addReply*() against primary clients has no effect...
      * A notable example is:
      *
      *    EVAL 'redis.call("incr",KEYS[1]); redis.call("nonexisting")' 1 x
      *
-     * Where the master must propagate the first change even if the second
+     * Where the primary must propagate the first change even if the second
      * will produce an error. However it is useful to log such events since
      * they are rare and may hint at errors in a script or a bug in Redis. */
-    if (c->flags & (CLIENT_MASTER|CLIENT_SLAVE)) {
-        char* to = c->flags & CLIENT_MASTER? "master": "slave";
-        char* from = c->flags & CLIENT_MASTER? "slave": "master";
+    if (c->flags & (CLIENT_PRIMARY|CLIENT_REPLICA)) {
+        char* to = c->flags & CLIENT_PRIMARY? "primary": "replica";
+        char* from = c->flags & CLIENT_PRIMARY? "replica": "primary";
         char *cmdname = c->lastcmd ? c->lastcmd->name : "<unknown>";
         serverLog(LL_WARNING,"== CRITICAL == This %s is sending an error "
                              "to its %s: '%s' after processing the command "
                              "'%s'", from, to, s, cmdname);
-        /* Here we want to panic because when a master is sending an
-         * error to some slave in the context of replication, this can
+        /* Here we want to panic because when a primary is sending an
+         * error to some replica in the context of replication, this can
          * only create some kind of offset or data desynchronization. Better
          * to catch it ASAP and crash instead of continuing. */
-        if (c->flags & CLIENT_SLAVE)
+        if (c->flags & CLIENT_REPLICA)
             serverPanic("Continuing is unsafe: replication protocol violation.");
     }
 }
@@ -759,19 +759,19 @@ static void freeClientArgv(client *c) {
     c->cmd = NULL;
 }
 
-/* Close all the slaves connections. This is useful in chained replication
- * when we resync with our own master and want to force all our slaves to
+/* Close all the replicas connections. This is useful in chained replication
+ * when we resync with our own primary and want to force all our replicas to
  * resync with us as well. */
-void disconnectSlaves(void) {
-    while (listLength(server.slaves)) {
-        listNode *ln = listFirst(server.slaves);
+void disconnectReplicas(void) {
+    while (listLength(server.replicas)) {
+        listNode *ln = listFirst(server.replicas);
         freeClient((client*)ln->value);
     }
 }
 
 /* Remove the specified client from global lists where the client could
  * be referenced, not including the Pub/Sub channels.
- * This is used by freeClient() and replicationCacheMaster(). */
+ * This is used by freeClient() and replicationCachePrimary(). */
 void unlinkClient(client *c) {
     listNode *ln;
 
@@ -818,26 +818,26 @@ void unlinkClient(client *c) {
 void freeClient(client *c) {
     listNode *ln;
 
-    /* If it is our master that's beging disconnected we should make sure
+    /* If it is our primary that's beging disconnected we should make sure
      * to cache the state to try a partial resynchronization later.
      *
      * Note that before doing this we make sure that the client is not in
      * some unexpected state, by checking its flags. */
-    if (server.master && c->flags & CLIENT_MASTER) {
-        serverLog(LL_WARNING,"Connection with master lost.");
+    if (server.primary && c->flags & CLIENT_PRIMARY) {
+        serverLog(LL_WARNING,"Connection with primary lost.");
         if (!(c->flags & (CLIENT_CLOSE_AFTER_REPLY|
                           CLIENT_CLOSE_ASAP|
                           CLIENT_BLOCKED)))
         {
-            replicationCacheMaster(c);
+            replicationCachePrimary(c);
             return;
         }
     }
 
-    /* Log link disconnection with slave */
-    if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR)) {
-        serverLog(LL_WARNING,"Connection with slave %s lost.",
-            replicationGetSlaveName(c));
+    /* Log link disconnection with replica */
+    if ((c->flags & CLIENT_REPLICA) && !(c->flags & CLIENT_MONITOR)) {
+        serverLog(LL_WARNING,"Connection with replica %s lost.",
+            replicationGetReplicaName(c));
     }
 
     /* Free the query buffer */
@@ -868,28 +868,28 @@ void freeClient(client *c) {
      * places where active clients may be referenced. */
     unlinkClient(c);
 
-    /* Master/slave cleanup Case 1:
-     * we lost the connection with a slave. */
-    if (c->flags & CLIENT_SLAVE) {
-        if (c->replstate == SLAVE_STATE_SEND_BULK) {
+    /* Primary/replica cleanup Case 1:
+     * we lost the connection with a replica. */
+    if (c->flags & CLIENT_REPLICA) {
+        if (c->replstate == REPLICA_STATE_SEND_BULK) {
             if (c->repldbfd != -1) close(c->repldbfd);
             if (c->replpreamble) sdsfree(c->replpreamble);
         }
-        list *l = (c->flags & CLIENT_MONITOR) ? server.monitors : server.slaves;
+        list *l = (c->flags & CLIENT_MONITOR) ? server.monitors : server.replicas;
         ln = listSearchKey(l,c);
         serverAssert(ln != NULL);
         listDelNode(l,ln);
         /* We need to remember the time when we started to have zero
-         * attached slaves, as after some time we'll free the replication
+         * attached replicas, as after some time we'll free the replication
          * backlog. */
-        if (c->flags & CLIENT_SLAVE && listLength(server.slaves) == 0)
-            server.repl_no_slaves_since = server.unixtime;
-        refreshGoodSlavesCount();
+        if (c->flags & CLIENT_REPLICA && listLength(server.replicas) == 0)
+            server.repl_no_replicas_since = server.unixtime;
+        refreshGoodReplicasCount();
     }
 
-    /* Master/slave cleanup Case 2:
-     * we lost the connection with the master. */
-    if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection();
+    /* Primary/replica cleanup Case 2:
+     * we lost the connection with the primary. */
+    if (c->flags & CLIENT_PRIMARY) replicationHandlePrimaryDisconnection();
 
     /* If this client was scheduled for async freeing we need to remove it
      * from the queue. */
@@ -994,12 +994,12 @@ int writeToClient(int fd, client *c, int handler_installed) {
          * just deliver as much data as it is possible to deliver.
          *
          * Moreover, we also send as much as possible if the client is
-         * a slave (otherwise, on high-speed traffic, the replication
+         * a replica (otherwise, on high-speed traffic, the replication
          * buffer will grow indefinitely) */
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
             (server.maxmemory == 0 ||
              zmalloc_used_memory() < server.maxmemory) &&
-            !(c->flags & CLIENT_SLAVE)) break;
+            !(c->flags & CLIENT_REPLICA)) break;
     }
     server.stat_net_output_bytes += totwritten;
     if (nwritten == -1) {
@@ -1013,11 +1013,11 @@ int writeToClient(int fd, client *c, int handler_installed) {
         }
     }
     if (totwritten > 0) {
-        /* For clients representing masters we don't count sending data
+        /* For clients representing primaries we don't count sending data
          * as an interaction, since we always send REPLCONF ACK commands
          * that take some time to just fill the socket output buffer.
          * We just rely on data / pings received for timeout detection. */
-        if (!(c->flags & CLIENT_MASTER)) c->lastinteraction = server.unixtime;
+        if (!(c->flags & CLIENT_PRIMARY)) c->lastinteraction = server.unixtime;
     }
     if (!clientHasPendingReplies(c)) {
         c->sentlen = 0;
@@ -1145,10 +1145,10 @@ int processInlineBuffer(client *c) {
         return C_ERR;
     }
 
-    /* Newline from slaves can be used to refresh the last ACK time.
-     * This is useful for a slave to ping back while loading a big
+    /* Newline from replicas can be used to refresh the last ACK time.
+     * This is useful for a replica to ping back while loading a big
      * RDB file. */
-    if (querylen == 0 && c->flags & CLIENT_SLAVE)
+    if (querylen == 0 && c->flags & CLIENT_REPLICA)
         c->repl_ack_time = server.unixtime;
 
     /* Move querybuffer position to the next query in the buffer. */
@@ -1359,16 +1359,16 @@ void processInputBuffer(client *c) {
     /* Keep processing while there is something in the input buffer */
     while(c->qb_pos < sdslen(c->querybuf)) {
         /* Return if clients are paused. */
-        if (!(c->flags & CLIENT_SLAVE) && clientsArePaused()) break;
+        if (!(c->flags & CLIENT_REPLICA) && clientsArePaused()) break;
 
         /* Immediately abort if the client is in the middle of something. */
         if (c->flags & CLIENT_BLOCKED) break;
 
-        /* Don't process input from the master while there is a busy script
-         * condition on the slave. We want just to accumulate the replication
+        /* Don't process input from the primary while there is a busy script
+         * condition on the replica. We want just to accumulate the replication
          * stream (instead of replying -BUSY like we do with other clients) and
          * later resume the processing. */
-        if (server.lua_timedout && c->flags & CLIENT_MASTER) break;
+        if (server.lua_timedout && c->flags & CLIENT_PRIMARY) break;
 
         /* CLIENT_CLOSE_AFTER_REPLY closes the connection once the reply is
          * written to the client. Make sure to not let the reply grow after
@@ -1400,8 +1400,8 @@ void processInputBuffer(client *c) {
         } else {
             /* Only reset the client when the command was executed. */
             if (processCommand(c) == C_OK) {
-                if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
-                    /* Update the applied replication offset of our master. */
+                if (c->flags & CLIENT_PRIMARY && !(c->flags & CLIENT_MULTI)) {
+                    /* Update the applied replication offset of our primary. */
                     c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
                 }
 
@@ -1412,8 +1412,8 @@ void processInputBuffer(client *c) {
                 if (!(c->flags & CLIENT_BLOCKED) || c->btype != BLOCKED_MODULE)
                     resetClient(c);
             }
-            /* freeMemoryIfNeeded may flush slave output buffers. This may
-             * result into a slave, that may be the active client, to be
+            /* freeMemoryIfNeeded may flush replica output buffers. This may
+             * result into a replica, that may be the active client, to be
              * freed. */
             if (server.current_client == NULL) break;
         }
@@ -1429,18 +1429,18 @@ void processInputBuffer(client *c) {
 }
 
 /* This is a wrapper for processInputBuffer that also cares about handling
- * the replication forwarding to the sub-slaves, in case the client 'c'
- * is flagged as master. Usually you want to call this instead of the
+ * the replication forwarding to the sub-replicas, in case the client 'c'
+ * is flagged as primary. Usually you want to call this instead of the
  * raw processInputBuffer(). */
 void processInputBufferAndReplicate(client *c) {
-    if (!(c->flags & CLIENT_MASTER)) {
+    if (!(c->flags & CLIENT_PRIMARY)) {
         processInputBuffer(c);
     } else {
         size_t prev_offset = c->reploff;
         processInputBuffer(c);
         size_t applied = c->reploff - prev_offset;
         if (applied) {
-            replicationFeedSlavesFromMasterStream(server.slaves,
+            replicationFeedReplicasFromPrimaryStream(server.replicas,
                     c->pending_querybuf, applied);
             sdsrange(c->pending_querybuf,applied,-1);
         }
@@ -1487,9 +1487,9 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_VERBOSE, "Client closed connection");
         freeClient(c);
         return;
-    } else if (c->flags & CLIENT_MASTER) {
+    } else if (c->flags & CLIENT_PRIMARY) {
         /* Append the query buffer to the pending (not applied) buffer
-         * of the master. We'll use this buffer later in order to have a
+         * of the primary. We'll use this buffer later in order to have a
          * copy of the string applied by the last command executed. */
         c->pending_querybuf = sdscatlen(c->pending_querybuf,
                                         c->querybuf+qblen,nread);
@@ -1497,7 +1497,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     sdsIncrLen(c->querybuf,nread);
     c->lastinteraction = server.unixtime;
-    if (c->flags & CLIENT_MASTER) c->read_reploff += nread;
+    if (c->flags & CLIENT_PRIMARY) c->read_reploff += nread;
     server.stat_net_input_bytes += nread;
     if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
         sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
@@ -1510,12 +1510,12 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         return;
     }
 
-    /* Time to process the buffer. If the client is a master we need to
+    /* Time to process the buffer. If the client is a primary we need to
      * compute the difference between the applied offset before and after
      * processing the buffer, to understand how much of the replication stream
-     * was actually applied to the master state: this quantity, and its
+     * was actually applied to the primary state: this quantity, and its
      * corresponding part of the replication stream, will be propagated to
-     * the sub-slaves and to the replication backlog. */
+     * the sub-replicas and to the replication backlog. */
     processInputBufferAndReplicate(c);
 }
 
@@ -1580,13 +1580,13 @@ sds catClientInfoString(sds s, client *client) {
     int emask;
 
     p = flags;
-    if (client->flags & CLIENT_SLAVE) {
+    if (client->flags & CLIENT_REPLICA) {
         if (client->flags & CLIENT_MONITOR)
             *p++ = 'O';
         else
             *p++ = 'S';
     }
-    if (client->flags & CLIENT_MASTER) *p++ = 'M';
+    if (client->flags & CLIENT_PRIMARY) *p++ = 'M';
     if (client->flags & CLIENT_PUBSUB) *p++ = 'P';
     if (client->flags & CLIENT_MULTI) *p++ = 'x';
     if (client->flags & CLIENT_BLOCKED) *p++ = 'b';
@@ -1654,10 +1654,10 @@ void clientCommand(client *c) {
 "kill <ip:port>         -- Kill connection made from <ip:port>.",
 "kill <option> <value> [option value ...] -- Kill connections. Options are:",
 "     addr <ip:port>                      -- Kill connection made from <ip:port>",
-"     type (normal|master|slave|pubsub)   -- Kill connections by type.",
+"     type (normal|primary|replica|pubsub)   -- Kill connections by type.",
 "     skipme (yes|no)   -- Skip killing current connection (default: yes).",
 "list [options ...]     -- Return information about client connections. Options:",
-"     type (normal|master|slave|pubsub)   -- Return clients of specified type.",
+"     type (normal|primary|replica|pubsub)   -- Return clients of specified type.",
 "pause <timeout>        -- Suspend all Redis clients for <timout> milliseconds.",
 "reply (on|off|skip)    -- Control the replies sent to the current connection.",
 "setname <name>         -- Assign the name <name> to the current connection.",
@@ -1976,32 +1976,32 @@ unsigned long getClientOutputBufferMemoryUsage(client *c) {
  *
  * The function will return one of the following:
  * CLIENT_TYPE_NORMAL -> Normal client
- * CLIENT_TYPE_SLAVE  -> Slave or client executing MONITOR command
+ * CLIENT_TYPE_REPLICA  -> Replica or client executing MONITOR command
  * CLIENT_TYPE_PUBSUB -> Client subscribed to Pub/Sub channels
- * CLIENT_TYPE_MASTER -> The client representing our replication master.
+ * CLIENT_TYPE_PRIMARY -> The client representing our replication primary.
  */
 int getClientType(client *c) {
-    if (c->flags & CLIENT_MASTER) return CLIENT_TYPE_MASTER;
-    if ((c->flags & CLIENT_SLAVE) && !(c->flags & CLIENT_MONITOR))
-        return CLIENT_TYPE_SLAVE;
+    if (c->flags & CLIENT_PRIMARY) return CLIENT_TYPE_PRIMARY;
+    if ((c->flags & CLIENT_REPLICA) && !(c->flags & CLIENT_MONITOR))
+        return CLIENT_TYPE_REPLICA;
     if (c->flags & CLIENT_PUBSUB) return CLIENT_TYPE_PUBSUB;
     return CLIENT_TYPE_NORMAL;
 }
 
 int getClientTypeByName(char *name) {
     if (!strcasecmp(name,"normal")) return CLIENT_TYPE_NORMAL;
-    else if (!strcasecmp(name,"slave")) return CLIENT_TYPE_SLAVE;
+    else if (!strcasecmp(name,"replica")) return CLIENT_TYPE_REPLICA;
     else if (!strcasecmp(name,"pubsub")) return CLIENT_TYPE_PUBSUB;
-    else if (!strcasecmp(name,"master")) return CLIENT_TYPE_MASTER;
+    else if (!strcasecmp(name,"primary")) return CLIENT_TYPE_PRIMARY;
     else return -1;
 }
 
 char *getClientTypeName(int class) {
     switch(class) {
     case CLIENT_TYPE_NORMAL: return "normal";
-    case CLIENT_TYPE_SLAVE:  return "slave";
+    case CLIENT_TYPE_REPLICA:  return "replica";
     case CLIENT_TYPE_PUBSUB: return "pubsub";
-    case CLIENT_TYPE_MASTER: return "master";
+    case CLIENT_TYPE_PRIMARY: return "primary";
     default:                       return NULL;
     }
 }
@@ -2017,9 +2017,9 @@ int checkClientOutputBufferLimits(client *c) {
     unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
 
     class = getClientType(c);
-    /* For the purpose of output buffer limiting, masters are handled
+    /* For the purpose of output buffer limiting, primaries are handled
      * like normal clients. */
-    if (class == CLIENT_TYPE_MASTER) class = CLIENT_TYPE_NORMAL;
+    if (class == CLIENT_TYPE_PRIMARY) class = CLIENT_TYPE_NORMAL;
 
     if (server.client_obuf_limits[class].hard_limit_bytes &&
         used_mem >= server.client_obuf_limits[class].hard_limit_bytes)
@@ -2069,31 +2069,31 @@ void asyncCloseClientOnOutputBufferLimitReached(client *c) {
     }
 }
 
-/* Helper function used by freeMemoryIfNeeded() in order to flush slaves
+/* Helper function used by freeMemoryIfNeeded() in order to flush replicas
  * output buffers without returning control to the event loop.
  * This is also called by SHUTDOWN for a best-effort attempt to send
- * slaves the latest writes. */
-void flushSlavesOutputBuffers(void) {
+ * replicas the latest writes. */
+void flushReplicasOutputBuffers(void) {
     listIter li;
     listNode *ln;
 
-    listRewind(server.slaves,&li);
+    listRewind(server.replicas,&li);
     while((ln = listNext(&li))) {
-        client *slave = listNodeValue(ln);
+        client *replica = listNodeValue(ln);
         int events;
 
-        /* Note that the following will not flush output buffers of slaves
+        /* Note that the following will not flush output buffers of replicas
          * in STATE_ONLINE but having put_online_on_ack set to true: in this
          * case the writable event is never installed, since the purpose
          * of put_online_on_ack is to postpone the moment it is installed.
-         * This is what we want since slaves in this state should not receive
+         * This is what we want since replicas in this state should not receive
          * writes before the first ACK. */
-        events = aeGetFileEvents(server.el,slave->fd);
+        events = aeGetFileEvents(server.el,replica->fd);
         if (events & AE_WRITABLE &&
-            slave->replstate == SLAVE_STATE_ONLINE &&
-            clientHasPendingReplies(slave))
+            replica->replstate == REPLICA_STATE_ONLINE &&
+            clientHasPendingReplies(replica))
         {
-            writeToClient(slave->fd,slave,0);
+            writeToClient(replica->fd,replica,0);
         }
     }
 }
@@ -2102,10 +2102,10 @@ void flushSlavesOutputBuffers(void) {
  * are paused no command is processed from clients, so the data set can't
  * change during that time.
  *
- * However while this function pauses normal and Pub/Sub clients, slaves are
+ * However while this function pauses normal and Pub/Sub clients, replicas are
  * still served, so this function can be used on server upgrades where it is
- * required that slaves process the latest bytes from the replication stream
- * before being turned to masters.
+ * required that replicas process the latest bytes from the replication stream
+ * before being turned to primaries.
  *
  * This function is also internally used by Redis Cluster for the manual
  * failover procedure implemented by CLUSTER FAILOVER.
@@ -2139,9 +2139,9 @@ int clientsArePaused(void) {
         while ((ln = listNext(&li)) != NULL) {
             c = listNodeValue(ln);
 
-            /* Don't touch slaves and blocked clients.
+            /* Don't touch replicas and blocked clients.
              * The latter pending requests will be processed when unblocked. */
-            if (c->flags & (CLIENT_SLAVE|CLIENT_BLOCKED)) continue;
+            if (c->flags & (CLIENT_REPLICA|CLIENT_BLOCKED)) continue;
             queueClientForReprocessing(c);
         }
     }
@@ -2151,7 +2151,7 @@ int clientsArePaused(void) {
 /* This function is called by Redis in order to process a few events from
  * time to time while blocked into some not interruptible operation.
  * This allows to reply to clients with the -LOADING error while loading the
- * data set at startup or after a full resynchronization with the master
+ * data set at startup or after a full resynchronization with the primary
  * and so forth.
  *
  * It calls the event loop in order to process a few events. Specifically we

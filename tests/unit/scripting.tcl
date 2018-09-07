@@ -399,7 +399,7 @@ start_server {tags {"scripting"}} {
         r get x
     } {10000}
 
-    test {EVAL processes writes from AOF in read-only slaves} {
+    test {EVAL processes writes from AOF in read-only replicas} {
         r flushall
         r config set appendonly yes
         r config set aof-use-rdb-preamble no
@@ -411,11 +411,11 @@ start_server {tags {"scripting"}} {
         } else {
             fail "AOF rewrite can't complete after CONFIG SET appendonly yes."
         }
-        r config set slave-read-only yes
-        r slaveof 127.0.0.1 0
+        r config set replica-read-only yes
+        r replicaof 127.0.0.1 0
         r debug loadaof
         set res [r get foo]
-        r slaveof no one
+        r replicaof no one
         set res
     } {102}
 
@@ -542,7 +542,7 @@ foreach cmdrepl {0 1} {
                 r debug lua-always-replicate-commands 1
             }
 
-            test "Before the slave connects we issue two EVAL commands $rt" {
+            test "Before the replica connects we issue two EVAL commands $rt" {
                 # One with an error, but still executing a command.
                 # SHA is: 67164fc43fa971f76fd1aaeeaf60c1c178d25876
                 catch {
@@ -553,17 +553,17 @@ foreach cmdrepl {0 1} {
                 r eval {return redis.call('incr',KEYS[1])} 1 x
             } {2}
 
-            test "Connect a slave to the master instance $rt" {
-                r -1 slaveof [srv 0 host] [srv 0 port]
+            test "Connect a replica to the primary instance $rt" {
+                r -1 replicaof [srv 0 host] [srv 0 port]
                 wait_for_condition 50 100 {
-                    [s -1 role] eq {slave} &&
-                    [string match {*master_link_status:up*} [r -1 info replication]]
+                    [s -1 role] eq {replica} &&
+                    [string match {*primary_link_status:up*} [r -1 info replication]]
                 } else {
-                    fail "Can't turn the instance into a slave"
+                    fail "Can't turn the instance into a replica"
                 }
             }
 
-            test "Now use EVALSHA against the master, with both SHAs $rt" {
+            test "Now use EVALSHA against the primary, with both SHAs $rt" {
                 # The server should replicate successful and unsuccessful
                 # commands as EVAL instead of EVALSHA.
                 catch {
@@ -592,7 +592,7 @@ foreach cmdrepl {0 1} {
                 wait_for_condition 50 100 {
                     [r -1 lrange a 0 -1] eq [r lrange a 0 -1]
                 } else {
-                    fail "Expected list 'a' in slave and master to be the same, but they are respectively '[r -1 lrange a 0 -1]' and '[r lrange a 0 -1]'"
+                    fail "Expected list 'a' in replica and primary to be the same, but they are respectively '[r -1 lrange a 0 -1]' and '[r lrange a 0 -1]'"
                 }
                 set res
             } {a 1}
@@ -627,7 +627,7 @@ foreach cmdrepl {0 1} {
                 wait_for_condition 50 100 {
                     [r -1 debug digest] eq [r debug digest]
                 } else {
-                    fail "Master-Slave desync after Lua script using SELECT."
+                    fail "Primary-Replica desync after Lua script using SELECT."
                 }
             }
         }
@@ -636,13 +636,13 @@ foreach cmdrepl {0 1} {
 
 start_server {tags {"scripting repl"}} {
     start_server {overrides {appendonly yes aof-use-rdb-preamble no}} {
-        test "Connect a slave to the master instance" {
-            r -1 slaveof [srv 0 host] [srv 0 port]
+        test "Connect a replica to the primary instance" {
+            r -1 replicaof [srv 0 host] [srv 0 port]
             wait_for_condition 50 100 {
-                [s -1 role] eq {slave} &&
-                [string match {*master_link_status:up*} [r -1 info replication]]
+                [s -1 role] eq {replica} &&
+                [string match {*primary_link_status:up*} [r -1 info replication]]
             } else {
-                fail "Can't turn the instance into a slave"
+                fail "Can't turn the instance into a replica"
             }
         }
 
@@ -696,10 +696,10 @@ start_server {tags {"scripting repl"}} {
             wait_for_condition 50 100 {
                 [r -1 mget a b c d] eq {1 {} {} 4}
             } else {
-                fail "Only a and c should be replicated to slave"
+                fail "Only a and c should be replicated to replica"
             }
 
-            # Master should have everything right now
+            # Primary should have everything right now
             assert {[r mget a b c d] eq {1 2 3 4}}
 
             # After an AOF reload only a, c and d should exist
@@ -735,7 +735,7 @@ start_server {tags {"scripting repl"}} {
             wait_for_condition 50 100 {
                 [r get time] eq [r -1 get time]
             } else {
-                fail "Time key does not match between master and slave"
+                fail "Time key does not match between primary and replica"
             }
         }
     }

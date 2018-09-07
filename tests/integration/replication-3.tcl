@@ -1,9 +1,9 @@
 start_server {tags {"repl"}} {
     start_server {} {
-        test {First server should have role slave after SLAVEOF} {
-            r -1 slaveof [srv 0 host] [srv 0 port]
+        test {First server should have role replica after REPLICAOF} {
+            r -1 replicaof [srv 0 host] [srv 0 port]
             wait_for_condition 50 100 {
-                [s -1 master_link_status] eq {up}
+                [s -1 primary_link_status] eq {up}
             } else {
                 fail "Replication not started."
             }
@@ -11,10 +11,10 @@ start_server {tags {"repl"}} {
 
         if {$::accurate} {set numops 50000} else {set numops 5000}
 
-        test {MASTER and SLAVE consistency with expire} {
+        test {PRIMARY and REPLICA consistency with expire} {
             createComplexDataset r $numops useexpire
             after 4000 ;# Make sure everything expired before taking the digest
-            r keys *   ;# Force DEL syntesizing to slave
+            r keys *   ;# Force DEL syntesizing to replica
             after 1000 ;# Wait another second. Now everything should be fine.
             if {[r debug digest] ne [r -1 debug digest]} {
                 set csv1 [csvdump r]
@@ -25,16 +25,16 @@ start_server {tags {"repl"}} {
                 set fd [open /tmp/repldump2.txt w]
                 puts -nonewline $fd $csv2
                 close $fd
-                puts "Master - Slave inconsistency"
+                puts "Primary - Replica inconsistency"
                 puts "Run diff -u against /tmp/repldump*.txt for more info"
             }
             assert_equal [r debug digest] [r -1 debug digest]
         }
 
-        test {Slave is able to evict keys created in writable slaves} {
+        test {Replica is able to evict keys created in writable replicas} {
             r -1 select 5
             assert {[r -1 dbsize] == 0}
-            r -1 config set slave-read-only no
+            r -1 config set replica-read-only no
             r -1 set key1 1 ex 5
             r -1 set key2 2 ex 5
             r -1 set key3 3 ex 5
@@ -47,10 +47,10 @@ start_server {tags {"repl"}} {
 
 start_server {tags {"repl"}} {
     start_server {} {
-        test {First server should have role slave after SLAVEOF} {
-            r -1 slaveof [srv 0 host] [srv 0 port]
+        test {First server should have role replica after REPLICAOF} {
+            r -1 replicaof [srv 0 host] [srv 0 port]
             wait_for_condition 50 100 {
-                [s -1 master_link_status] eq {up}
+                [s -1 primary_link_status] eq {up}
             } else {
                 fail "Replication not started."
             }
@@ -62,7 +62,7 @@ start_server {tags {"repl"}} {
         # after the test.
         r config set appendonly yes
 
-        test {MASTER and SLAVE consistency with EVALSHA replication} {
+        test {PRIMARY and REPLICA consistency with EVALSHA replication} {
             array set oldsha {}
             for {set j 0} {$j < $numops} {incr j} {
                 set key "key:$j"
@@ -98,7 +98,7 @@ start_server {tags {"repl"}} {
                 set fd [open /tmp/repldump2.txt w]
                 puts -nonewline $fd $csv2
                 close $fd
-                puts "Master - Slave inconsistency"
+                puts "Primary - Replica inconsistency"
                 puts "Run diff -u against /tmp/repldump*.txt for more info"
             }
 
@@ -109,17 +109,17 @@ start_server {tags {"repl"}} {
             assert {$old_digest eq $new_digest}
         }
 
-        test {SLAVE can reload "lua" AUX RDB fields of duplicated scripts} {
-            # Force a Slave full resynchronization
+        test {REPLICA can reload "lua" AUX RDB fields of duplicated scripts} {
+            # Force a Replica full resynchronization
             r debug change-repl-id
-            r -1 client kill type master
+            r -1 client kill type primary
 
-            # Check that after a full resync the slave can still load
+            # Check that after a full resync the replica can still load
             # correctly the RDB file: such file will contain "lua" AUX
-            # sections with scripts already in the memory of the master.
+            # sections with scripts already in the memory of the primary.
 
             wait_for_condition 50 100 {
-                [s -1 master_link_status] eq {up}
+                [s -1 primary_link_status] eq {up}
             } else {
                 fail "Replication not started."
             }

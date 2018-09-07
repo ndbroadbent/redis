@@ -10,20 +10,20 @@ proc stop_bg_complex_data {handle} {
 start_server {tags {"repl"}} {
     start_server {} {
 
-        set master [srv -1 client]
-        set master_host [srv -1 host]
-        set master_port [srv -1 port]
-        set slave [srv 0 client]
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
 
-        set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000]
-        set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000]
-        set load_handle2 [start_bg_complex_data $master_host $master_port 12 100000]
+        set load_handle0 [start_bg_complex_data $primary_host $primary_port 9 100000]
+        set load_handle1 [start_bg_complex_data $primary_host $primary_port 11 100000]
+        set load_handle2 [start_bg_complex_data $primary_host $primary_port 12 100000]
 
-        test {First server should have role slave after SLAVEOF} {
-            $slave slaveof $master_host $master_port
+        test {First server should have role replica after REPLICAOF} {
+            $replica replicaof $primary_host $primary_port
             after 1000
             s 0 role
-        } {slave}
+        } {replica}
 
         test {Test replication with parallel clients writing in differnet DBs} {
             after 5000
@@ -31,14 +31,14 @@ start_server {tags {"repl"}} {
             stop_bg_complex_data $load_handle1
             stop_bg_complex_data $load_handle2
             set retry 10
-            while {$retry && ([$master debug digest] ne [$slave debug digest])}\
+            while {$retry && ([$primary debug digest] ne [$replica debug digest])}\
             {
                 after 1000
                 incr retry -1
             }
-            assert {[$master dbsize] > 0}
+            assert {[$primary dbsize] > 0}
 
-            if {[$master debug digest] ne [$slave debug digest]} {
+            if {[$primary debug digest] ne [$replica debug digest]} {
                 set csv1 [csvdump r]
                 set csv2 [csvdump {r -1}]
                 set fd [open /tmp/repldump1.txt w]
@@ -47,7 +47,7 @@ start_server {tags {"repl"}} {
                 set fd [open /tmp/repldump2.txt w]
                 puts -nonewline $fd $csv2
                 close $fd
-                puts "Master - Slave inconsistency"
+                puts "Primary - Replica inconsistency"
                 puts "Run diff -u against /tmp/repldump*.txt for more info"
             }
             assert_equal [r debug digest] [r -1 debug digest]
@@ -57,41 +57,41 @@ start_server {tags {"repl"}} {
 
 start_server {tags {"repl"}} {
     start_server {} {
-        set master [srv -1 client]
-        set master_host [srv -1 host]
-        set master_port [srv -1 port]
-        set slave [srv 0 client]
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
 
-        test {First server should have role slave after SLAVEOF} {
-            $slave slaveof $master_host $master_port
+        test {First server should have role replica after REPLICAOF} {
+            $replica replicaof $primary_host $primary_port
             wait_for_condition 50 100 {
-                [s 0 master_link_status] eq {up}
+                [s 0 primary_link_status] eq {up}
             } else {
                 fail "Replication not started."
             }
         }
 
-        test {With min-slaves-to-write (1,3): master should be writable} {
-            $master config set min-slaves-max-lag 3
-            $master config set min-slaves-to-write 1
-            $master set foo bar
+        test {With min-replicas-to-write (1,3): primary should be writable} {
+            $primary config set min-replicas-max-lag 3
+            $primary config set min-replicas-to-write 1
+            $primary set foo bar
         } {OK}
 
-        test {With min-slaves-to-write (2,3): master should not be writable} {
-            $master config set min-slaves-max-lag 3
-            $master config set min-slaves-to-write 2
-            catch {$master set foo bar} e
+        test {With min-replicas-to-write (2,3): primary should not be writable} {
+            $primary config set min-replicas-max-lag 3
+            $primary config set min-replicas-to-write 2
+            catch {$primary set foo bar} e
             set e
         } {NOREPLICAS*}
 
-        test {With min-slaves-to-write: master not writable with lagged slave} {
-            $master config set min-slaves-max-lag 2
-            $master config set min-slaves-to-write 1
-            assert {[$master set foo bar] eq {OK}}
-            $slave deferred 1
-            $slave debug sleep 6
+        test {With min-replicas-to-write: primary not writable with lagged replica} {
+            $primary config set min-replicas-max-lag 2
+            $primary config set min-replicas-to-write 1
+            assert {[$primary set foo bar] eq {OK}}
+            $replica deferred 1
+            $replica debug sleep 6
             after 4000
-            catch {$master set foo bar} e
+            catch {$primary set foo bar} e
             set e
         } {NOREPLICAS*}
     }
@@ -99,15 +99,15 @@ start_server {tags {"repl"}} {
 
 start_server {tags {"repl"}} {
     start_server {} {
-        set master [srv -1 client]
-        set master_host [srv -1 host]
-        set master_port [srv -1 port]
-        set slave [srv 0 client]
+        set primary [srv -1 client]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
+        set replica [srv 0 client]
 
-        test {First server should have role slave after SLAVEOF} {
-            $slave slaveof $master_host $master_port
+        test {First server should have role replica after REPLICAOF} {
+            $replica replicaof $primary_host $primary_port
             wait_for_condition 50 100 {
-                [s 0 role] eq {slave}
+                [s 0 role] eq {replica}
             } else {
                 fail "Replication not started."
             }
@@ -121,32 +121,32 @@ start_server {tags {"repl"}} {
                 for {set x 0} {$x < 1000} {incr x} {
                     lappend cmd [randomKey] [randomValue]
                 }
-                $master {*}$cmd
+                $primary {*}$cmd
             }
 
             set retry 10
-            while {$retry && ([$master debug digest] ne [$slave debug digest])}\
+            while {$retry && ([$primary debug digest] ne [$replica debug digest])}\
             {
                 after 1000
                 incr retry -1
             }
-            assert {[$master dbsize] > 0}
+            assert {[$primary dbsize] > 0}
         }
 
         test {Replication of SPOP command -- alsoPropagate() API} {
-            $master del myset
+            $primary del myset
             set size [expr 1+[randomInt 100]]
             set content {}
             for {set j 0} {$j < $size} {incr j} {
                 lappend content [randomValue]
             }
-            $master sadd myset {*}$content
+            $primary sadd myset {*}$content
 
             set count [randomInt 100]
-            set result [$master spop myset $count]
+            set result [$primary spop myset $count]
 
             wait_for_condition 50 100 {
-                [$master debug digest] eq [$slave debug digest]
+                [$primary debug digest] eq [$replica debug digest]
             } else {
                 fail "SPOP replication inconsistency"
             }
